@@ -1,0 +1,261 @@
+diff --git a/.gitignore b/.gitignore
+new file mode 100644
+index 0000000..a437014
+--- /dev/null
++++ b/.gitignore
+@@ -0,0 +1,25 @@
++# Python environments and caches
++.venv/
++venv/
++__pycache__/
++*.py[cod]
++.pytest_cache/
++.mypy_cache/
++.ruff_cache/
++
++# Local configuration and secrets
++.env
++.env.*
++!.env.example
++
++# Generated analysis outputs and user-local data
++outputs/
++data/local/
++data/samples/*.mp4
++data/samples/*.mov
++data/samples/*.avi
++data/samples/*.mkv
++
++# Downloaded MediaPipe model assets
++models/*.task
++models/*.tflite
+diff --git a/README.md b/README.md
+index 2d93488..c1c5491 100644
+--- a/README.md
++++ b/README.md
+@@ -16,35 +16,12 @@
+ Các metric có thể bị ẩn hoặc đánh dấu experimental nếu chưa đủ dữ liệu để tin cậy. Contact time không được xem là phép đo chính xác chỉ từ keypoint cổ chân.
+ 
+ ## Yêu cầu môi trường
+-- Python 3.11 (mục tiêu ban đầu).
+-- FFmpeg nếu cần cho codec/chuyển đổi video.
+-- Model asset được tải theo hướng dẫn riêng sau khi xác minh phiên bản, nguồn và giấy phép.
+-- Bộ nhớ/CPU/GPU tùy kích thước video và model.
++- Windows 64-bit, Python 3.11, suy luận local trên CPU.
++- MediaPipe Pose Landmarker Full float16 v1 là model candidate đầu tiên.
++- MP4, giới hạn đầu vào ứng dụng dự kiến 100 MB và 60 giây; đây không phải giới hạn của MediaPipe.
++- Các dependency trực tiếp đã được pin trong `requirements.txt`.
+ 
+-Phiên bản thư viện chính xác sẽ được khóa sau Phase 0 trong `PLAN.md`; không cài đặt bằng một danh sách version chưa được kiểm tra.
+-
+-## Cài đặt (sau khi repository được triển khai)
+-```bash
+-python -m venv .venv
+-```
+-
+-Windows PowerShell:
+-```powershell
+-.venv\\Scripts\\Activate.ps1
+-```
+-
+-macOS/Linux:
+-```bash
+-source .venv/bin/activate
+-```
+-
+-Sau khi `requirements.txt` đã được xác minh:
+-```bash
+-python -m pip install --upgrade pip
+-pip install -r requirements.txt
+-```
+-
+-Tải/đặt model asset theo hướng dẫn do dự án cung cấp. Không đặt API key hoặc secret vào repository.
++Xem [hướng dẫn cài đặt và xác minh Phase 0](docs/PHASE0_SETUP.md) để tạo môi trường, tải model và kiểm tra SHA-256. Không đặt API key hoặc secret vào repository.
+ 
+ ## Chạy ứng dụng
+ Khi `app.py` đã được triển khai:
+@@ -90,4 +67,4 @@ Xem `ARCHITECTURE.md` để biết luồng dữ liệu và trách nhiệm từng
+ - Không có cơ sở để đưa ra chẩn đoán hoặc dự đoán chấn thương.
+ 
+ ## Trạng thái dự án
+-Đây là tài liệu nền tảng/specification. Chỉ đánh dấu tính năng “đã triển khai” sau khi code thực sự tồn tại và đã được kiểm thử. Không coi README này là bằng chứng ứng dụng đã chạy.
++Repository hiện có tài liệu đặc tả và nền tảng cài đặt Phase 0; pipeline phân tích và ứng dụng chưa được triển khai. Kiểm tra import/model/inference đã chạy trên Windows 11 x64 với Python 3.12.10; môi trường Python 3.11 chưa được chạy trên host này. Không coi tài liệu setup là bằng chứng ứng dụng end-to-end đã chạy.
+diff --git a/docs/PHASE0_SETUP.md b/docs/PHASE0_SETUP.md
+new file mode 100644
+index 0000000..6dfb47b
+--- /dev/null
++++ b/docs/PHASE0_SETUP.md
+@@ -0,0 +1,94 @@
++# Phase 0: Windows setup and validation
++
++## Target and dependency choices
++
++Target Windows x64 with Python 3.11 and CPU inference. The direct dependency pins are in requirements.txt:
++
++- MediaPipe 1.1.1 (Pose Landmarker API)
++- OpenCV Contrib 4.12.0.88
++- NumPy 2.2.6
++- Streamlit 1.64.0
++
++As of 2026-10-19, PyPI lists Windows x64 wheels and Python 3.11 classifiers for MediaPipe 1.1.1; OpenCV 4.12.0.88 provides a Windows x64 abi3 wheel and requires NumPy >=2,<2.3 on Python 3.11; NumPy 2.2.6 has a CPython 3.11 Windows x64 wheel; Streamlit 1.64.0 requires Python >=3.10 and accepts NumPy >=1.23,<3. These constraints intersect. MediaPipe's PyPI development-status classifier is Alpha, so keep it behind an adapter and recheck before upgrades.
++
++Use opencv-contrib-python only. Do not install opencv-python alongside it: both distributions provide the cv2 module. The 100 MB and 60 second MP4 limits are proposed application input limits, not MediaPipe limits; they are not enforced by this Phase 0 setup.
++
++The requirements file pins direct dependencies. Transitive dependencies are resolved by pip and are not fully locked yet; generate a Python 3.11 lock only after the target runtime has been validated.
++
++## Windows PowerShell setup
++
++Install the official Python install manager from python.org or the Microsoft Store. The Python.org manager supports installing Python 3.11 even though recent 3.11 security releases no longer publish traditional Windows installers. Then:
++
++    py install 3.11
++    py -3.11 --version
++    py -3.11 -c "import struct; print(struct.calcsize('P') * 8)"
++    py -3.11 -m venv .venv
++    .\.venv\Scripts\Activate.ps1
++    python -m pip install --upgrade pip
++    python -m pip install -r requirements.txt
++    python -m pip check
++
++The version check should print Python 3.11.x; the architecture check should print 64. If PowerShell blocks activation, run Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass in that terminal, then activate again. This only changes the current process.
++
++## Model asset: source, version, license, and integrity
++
++Initial candidate: Pose Landmarker Full, float16, asset version 1. The official versioned model URL is:
++
++    https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task
++
++Create a local models directory and download the asset explicitly:
++
++    New-Item -ItemType Directory -Force models | Out-Null
++    Invoke-WebRequest "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task" -OutFile "models\pose_landmarker_full.task"
++
++Verify the exact asset with PowerShell:
++
++    $expected = "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1"
++    $actual = (Get-FileHash "models\pose_landmarker_full.task" -Algorithm SHA256).Hash.ToLowerInvariant()
++    if ($actual -ne $expected) { throw "Pose model checksum mismatch: $actual" }
++    Write-Output "Pose model SHA-256 verified: $actual"
++
++The expected SHA-256 was computed from the downloaded official asset during Phase 0. A MediaPipe maintainer has confirmed that this specific full float16 v1 asset is Apache-2.0 licensed. The MediaPipe Python package is also listed as Apache-2.0 on PyPI. The model is not committed; .gitignore excludes downloaded .task and .tflite files. If model redistribution is added later, include the applicable Apache-2.0 license and upstream notices. The project itself still has no selected license; this setup does not create one.
++
++## Environment verification
++
++Run these from the repository root after downloading the model:
++
++    python -m pip check
++    python -c "import cv2, mediapipe, numpy, streamlit; print(mediapipe.__version__, cv2.__version__, numpy.__version__, streamlit.__version__)"
++    python scripts\verify_environment.py
++    python scripts\verify_environment.py --image "C:\path\to\person.jpg"
++
++The verification script checks the model hash, imports the direct dependencies, initializes Pose Landmarker with the CPU delegate, and optionally runs image inference. It never downloads files or makes network calls. For an inference smoke test, use a local image with a clearly visible person. This tests model execution only; it does not validate running gait events or metrics.
++
++## Phase 0 acceptance criteria
++
++| Check | Acceptance criterion | Status from this environment |
++|---|---|---|
++| Python environment | Create and activate a Windows x64 Python 3.11 virtual environment. | **Not completed here.** The available interpreter was Python 3.12.10; installing the Python manager was not completed because WinGet required Microsoft Store source terms. `pip download` successfully resolved all four pinned direct wheels for CPython 3.11 / Windows x64, but that is not a Python 3.11 runtime test. |
++| Dependencies | Install requirements.txt and pass pip check. | **Passed on Windows 11 x64 / Python 3.12.10** with the exact pins in this repository. Python 3.11 install remains to be run. |
++| Import and model initialization | Import dependencies, verify model checksum, initialize Pose Landmarker on CPU. | **Passed on Windows 11 x64 / Python 3.12.10** using the listed asset. |
++| Local inference smoke test | Run detect on a local still image and record execution/result without claiming gait validity. | **Passed on Python 3.12.10** using the image linked by the upstream MediaPipe Python sample notebook: one pose returned with 33 landmarks. No running video was tested. |
++| Model provenance/license | Record exact official source, version, license, and hash. | **Verified** for the Full float16 v1 asset; SHA-256 matched the downloaded file. |
++| Reporting gaps | Clearly identify checks not performed. | Python 3.11 execution and any application-level MP4 size/duration enforcement remain unverified. No app or sample video was assumed to exist. |
++
++The validation above is recorded honestly: dependency installation and inference succeeded on Python 3.12.10, not Python 3.11. Before treating Phase 0 as fully accepted, repeat the setup and verification commands in a Windows x64 Python 3.11 environment. MP4 decoding, the proposed 100 MB/60 second limits, and any gait-specific quality or accuracy remain untested.
++
++## Troubleshooting
++
++- If MediaPipe or cv2 imports fail, verify the activated interpreter with python --version and confirm it is the virtual environment.
++- If pip check reports a conflict, reinstall from the pinned requirements file in a fresh virtual environment; do not add a second OpenCV distribution.
++- If the checksum differs, delete the downloaded asset and fetch it again from the versioned official URL. Do not use an unverified model file.
++- If inference returns zero poses, the model still ran; try a clear image with one full person visible. A still image smoke test does not establish running-video performance.
++- TensorFlow Lite may print delegate or feedback-manager warnings during local CPU inference. Record them, and treat an exception or missing model asset as a failed check.
++
++## References
++
++- [MediaPipe 1.1.1 package metadata and Windows wheels](https://pypi.org/project/mediapipe/1.1.1/)
++- [OpenCV Contrib 4.12.0.88 package metadata](https://pypi.org/project/opencv-contrib-python/4.12.0.88/)
++- [NumPy 2.2.6 package metadata](https://pypi.org/project/numpy/2.2.6/)
++- [Streamlit 1.64.0 package metadata](https://pypi.org/project/streamlit/1.64.0/)
++- [Pose Landmarker Python API](https://ai.google.dev/edge/api/mediapipe/python/mp/tasks/vision/PoseLandmarker)
++- [Upstream confirmation of the Full float16 v1 model license](https://github.com/google-ai-edge/mediapipe/issues/6306)
++- [MediaPipe Python sample notebook used for the image smoke test](https://github.com/google-ai-edge/mediapipe-samples/blob/main/examples/pose_landmarker/python/%5BMediaPipe_Python_Tasks%5D_Pose_Landmarker.ipynb)
++- [Python install manager for Windows](https://docs.python.org/3/using/windows.html) and [Python 3.11.17 release information](https://www.python.org/downloads/release/python-31117/)
+diff --git a/requirements.txt b/requirements.txt
+new file mode 100644
+index 0000000..eac7f06
+--- /dev/null
++++ b/requirements.txt
+@@ -0,0 +1,4 @@
++mediapipe==1.1.1
++opencv-contrib-python==4.12.0.88
++numpy==2.2.6
++streamlit==1.64.0
+diff --git a/scripts/verify_environment.py b/scripts/verify_environment.py
+new file mode 100644
+index 0000000..5dcae59
+--- /dev/null
++++ b/scripts/verify_environment.py
+@@ -0,0 +1,63 @@
++from __future__ import annotations
++
++import argparse
++import hashlib
++from importlib.metadata import version
++from pathlib import Path
++
++EXPECTED_MODEL_SHA256 = "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1"
++
++
++def sha256_file(path: Path) -> str:
++    digest = hashlib.sha256()
++    with path.open("rb") as file:
++        for block in iter(lambda: file.read(1024 * 1024), b""):
++            digest.update(block)
++    return digest.hexdigest()
++
++
++def main() -> int:
++    parser = argparse.ArgumentParser(description="Verify local pose-estimation dependencies and model.")
++    parser.add_argument("--model", type=Path, default=Path("models/pose_landmarker_full.task"))
++    parser.add_argument("--image", type=Path, help="Optional local image containing a visible person for inference.")
++    args = parser.parse_args()
++
++    if not args.model.is_file():
++        parser.error(f"Model file not found: {args.model}")
++    actual_sha256 = sha256_file(args.model)
++    if actual_sha256 != EXPECTED_MODEL_SHA256:
++        parser.error(f"Model SHA-256 mismatch: {actual_sha256}")
++    if args.image is not None and not args.image.is_file():
++        parser.error(f"Image file not found: {args.image}")
++
++    import cv2
++    import mediapipe as mp
++    import numpy as np
++    import streamlit
++
++    print(f"mediapipe={mp.__version__}")
++    print(f"opencv-contrib-python={version('opencv-contrib-python')}; cv2={cv2.__version__}")
++    print(f"numpy={np.__version__}")
++    print(f"streamlit={streamlit.__version__}")
++    print(f"model_sha256={actual_sha256}")
++
++    options = mp.tasks.vision.PoseLandmarkerOptions(
++        base_options=mp.tasks.BaseOptions(
++            model_asset_path=str(args.model.resolve()),
++            delegate=mp.tasks.BaseOptions.Delegate.CPU,
++        ),
++        running_mode=mp.tasks.vision.RunningMode.IMAGE,
++    )
++    with mp.tasks.vision.PoseLandmarker.create_from_options(options) as landmarker:
++        print("Pose Landmarker initialized with CPU delegate.")
++        if args.image is not None:
++            result = landmarker.detect(mp.Image.create_from_file(str(args.image.resolve())))
++            counts = [len(pose) for pose in result.pose_landmarks]
++            print(f"poses_detected={len(counts)}; landmarks_per_pose={counts}")
++        else:
++            print("Inference skipped; pass --image <path> to run a local inference smoke test.")
++    return 0
++
++
++if __name__ == "__main__":
++    raise SystemExit(main())
