@@ -16,35 +16,12 @@
 Các metric có thể bị ẩn hoặc đánh dấu experimental nếu chưa đủ dữ liệu để tin cậy. Contact time không được xem là phép đo chính xác chỉ từ keypoint cổ chân.
 
 ## Yêu cầu môi trường
-- Python 3.11 (mục tiêu ban đầu).
-- FFmpeg nếu cần cho codec/chuyển đổi video.
-- Model asset được tải theo hướng dẫn riêng sau khi xác minh phiên bản, nguồn và giấy phép.
-- Bộ nhớ/CPU/GPU tùy kích thước video và model.
+- Windows 64-bit, Python 3.11, suy luận local trên CPU.
+- MediaPipe Pose Landmarker Full float16 v1 là model candidate đầu tiên.
+- MP4, giới hạn đầu vào ứng dụng dự kiến 100 MB và 60 giây; đây không phải giới hạn của MediaPipe.
+- Các dependency trực tiếp đã được pin trong `requirements.txt`.
 
-Phiên bản thư viện chính xác sẽ được khóa sau Phase 0 trong `PLAN.md`; không cài đặt bằng một danh sách version chưa được kiểm tra.
-
-## Cài đặt (sau khi repository được triển khai)
-```bash
-python -m venv .venv
-```
-
-Windows PowerShell:
-```powershell
-.venv\\Scripts\\Activate.ps1
-```
-
-macOS/Linux:
-```bash
-source .venv/bin/activate
-```
-
-Sau khi `requirements.txt` đã được xác minh:
-```bash
-python -m pip install --upgrade pip
-pip install -r requirements.txt
-```
-
-Tải/đặt model asset theo hướng dẫn do dự án cung cấp. Không đặt API key hoặc secret vào repository.
+Xem [hướng dẫn cài đặt và xác minh Phase 0](docs/PHASE0_SETUP.md) để tạo môi trường, tải model và kiểm tra SHA-256. Không đặt API key hoặc secret vào repository.
 
 ## Chạy ứng dụng
 Khi `app.py` đã được triển khai:
@@ -90,4 +67,4 @@ Xem `ARCHITECTURE.md` để biết luồng dữ liệu và trách nhiệm từng
 - Không có cơ sở để đưa ra chẩn đoán hoặc dự đoán chấn thương.
 
 ## Trạng thái dự án
-Đây là tài liệu nền tảng/specification. Chỉ đánh dấu tính năng “đã triển khai” sau khi code thực sự tồn tại và đã được kiểm thử. Không coi README này là bằng chứng ứng dụng đã chạy.
+Repository hiện có tài liệu đặc tả và nền tảng cài đặt Phase 0; pipeline phân tích và ứng dụng chưa được triển khai. Kiểm tra import/model/inference đã chạy trên Windows 11 x64 với Python 3.12.10; môi trường Python 3.11 chưa được chạy trên host này. Không coi tài liệu setup là bằng chứng ứng dụng end-to-end đã chạy.

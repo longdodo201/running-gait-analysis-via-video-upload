@@ -1,0 +1,25 @@
+# Python environments and caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+
+# Generated analysis outputs and user-local data
+outputs/
+data/local/
+data/samples/*.mp4
+data/samples/*.mov
+data/samples/*.avi
+data/samples/*.mkv
+
+# Downloaded MediaPipe model assets
+models/*.task
+models/*.tflite
