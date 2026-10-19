@@ -73,4 +73,4 @@ Xem `ARCHITECTURE.md` để biết luồng dữ liệu và trách nhiệm từng
 - Không có cơ sở để đưa ra chẩn đoán hoặc dự đoán chấn thương.
 
 ## Trạng thái dự án
-Phase 0 setup và Phase 1 video/landmark pipeline đã được triển khai. Phase 1 chưa xác thực chất lượng pose trên video chạy thật; Phase 2 trở đi (quality assessment, gait events, metrics, charts/reporting và Streamlit UI) chưa được triển khai. Không diễn giải độ tin cậy của model thành độ chính xác sinh cơ học hoặc kết luận y tế.
+Phase 0 setup và Phase 1 video/landmark pipeline đã được triển khai. Phase 1 chưa xác thực chất lượng pose trên video chạy thật(C:\Users\Admin\Documents\Codex\2026-10-18); Phase 2 trở đi (quality assessment, gait events, metrics, charts/reporting và Streamlit UI) chưa được triển khai. Không diễn giải độ tin cậy của model thành độ chính xác sinh cơ học hoặc kết luận y tế.
