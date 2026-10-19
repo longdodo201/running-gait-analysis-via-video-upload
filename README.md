@@ -74,3 +74,10 @@ Xem `ARCHITECTURE.md` để biết luồng dữ liệu và trách nhiệm từng
 
 ## Trạng thái dự án
 Phase 0 setup và Phase 1 video/landmark pipeline đã được triển khai. Phase 1 chưa xác thực chất lượng pose trên video chạy thật(C:\Users\Admin\Documents\Codex\2026-10-18); Phase 2 trở đi (quality assessment, gait events, metrics, charts/reporting và Streamlit UI) chưa được triển khai. Không diễn giải độ tin cậy của model thành độ chính xác sinh cơ học hoặc kết luận y tế.
+đã chạy và cho ra kết quả json và mp4   
+Đầu ra là pose landmarks thô, không phải kết quả phân tích dáng chạy.
+Chưa có gait-event detector, cadence, step time, góc gối/knee ROM, biểu đồ hay báo cáo.
+Tọa độ 2D chịu ảnh hưởng của góc camera, phối cảnh, che khuất, ánh sáng, độ phân giải và nhiễu landmark.
+Timestamp dựa trên FPS nguồn khi FPS hợp lệ; video variable-frame-rate không được khôi phục timestamp chính xác từ metadata OpenCV.
+Thành công khi chạy pipeline chỉ xác nhận chương trình xử lý được clip đó; không chứng minh độ chính xác sinh cơ học hoặc khả năng chẩn đoán.
+output nằm ở: C:\Users\Admin\Documents\Codex\2026-10-18\github-plugin-github-openai-curated-remote-2\work\running-gait-analysis-phase1-main\outputs
