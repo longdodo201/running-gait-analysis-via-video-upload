@@ -79,6 +79,35 @@ def pose_from_mediapipe(landmarks: list[object]) -> Pose:
     return Pose(named)
 
 
+def angle_2d_degrees(point_a: tuple[float, float], vertex: tuple[float, float], point_c: tuple[float, float]) -> float:
+    """Return the 2D interior angle at ``vertex`` in degrees.
+
+    Coordinates must already use the same scale (for normalized image points,
+    convert x/y to pixels before calling). Invalid and degenerate geometry is
+    rejected with ``ValueError``.
+    """
+    points = (point_a, vertex, point_c)
+    if any(not isinstance(point, (tuple, list)) or len(point) != 2 for point in points):
+        raise ValueError("Angle coordinates must be numeric pairs.")
+    values = tuple(value for point in points for value in point)
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in values):
+        raise ValueError("Angle coordinates must be numeric pairs.")
+    coordinates = tuple(float(value) for value in values)
+    if len(coordinates) != 6 or not all(math.isfinite(value) for value in coordinates):
+        raise ValueError("Angle coordinates must contain six finite numbers.")
+
+    ax, ay, vx, vy, cx, cy = coordinates
+    first = (ax - vx, ay - vy)
+    second = (cx - vx, cy - vy)
+    first_length = math.hypot(*first)
+    second_length = math.hypot(*second)
+    if first_length == 0 or second_length == 0:
+        raise ValueError("Angle is undefined when either segment has zero length.")
+
+    cosine = (first[0] * second[0] + first[1] * second[1]) / (first_length * second_length)
+    return math.degrees(math.acos(max(-1.0, min(1.0, cosine))))
+
+
 def document_to_dict(document: ExtractionDocument) -> dict[str, Any]:
     """Return JSON-safe primitive values, preserving frame and landmark names."""
     return asdict(document)

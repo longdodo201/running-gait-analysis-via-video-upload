@@ -42,23 +42,25 @@ JSON dùng `schema_version` `1.0`, metadata video, quy ước timestamp và danh
 python -m unittest discover -s tests -v
 ```
 
-Tests Phase 1 dùng fixture/mocks, chạy offline và không cần model hoặc video chạy thật. Manual smoke test riêng: chuẩn bị một MP4 ngắn có quyền sử dụng, tải và xác minh model theo Phase 0, rồi chạy lệnh CLI ở trên; xác nhận số frame/pose và mở overlay đầu ra nếu bật. Không có smoke test video thật nào được khẳng định trong repository này.
+Unit/integration tests dùng fixture/mocks, chạy offline và không cần model hoặc video thật. Smoke test local tùy chọn: chuẩn bị MP4 có quyền sử dụng, tải và xác minh model theo Phase 0, rồi chạy CLI hoặc UI; kiểm tra video overlay cùng các artifact. Test tự động không chạy inference thật.
 
 ## Đánh giá event detector
-Khi đã có annotation thủ công:
-```bash
-python scripts/evaluate.py --help
+Quy trình đánh giá candidate và annotation thủ công ban đầu được mô tả trong [docs/PHASE2_5_EVENT_EVALUATION.md](docs/PHASE2_5_EVENT_EVALUATION.md). Ground Truth event-level hiện có trong `outputs/foot_strike_ground_truth.csv`; so sánh hai thuật toán, góc gối tại các frame đã gán nhãn và cadence được mô tả trong [docs/PHASE3_GROUND_TRUTH_EVALUATION.md](docs/PHASE3_GROUND_TRUTH_EVALUATION.md). Nhãn video là reference quan sát, không phải ground truth cấp phòng thí nghiệm.
+
+## Ứng dụng local sau khi phân tích
+
+Từ thư mục gốc, cài dependencies theo [docs/PHASE0_SETUP.md](docs/PHASE0_SETUP.md), tải model và khởi chạy:
+
+```powershell
+streamlit run app.py
 ```
 
-Dùng schema và quy trình được mô tả trong `EVALUATION.md`. Không diễn giải nhãn thủ công từ video thành ground truth cấp phòng thí nghiệm.
+Chọn một MP4 side-view rồi nhấn **Analyze video**. Quá trình chạy cục bộ; giới hạn mặc định là 100 MiB và 60 giây. Mỗi lượt chạy được lưu trong thư mục mới dưới `outputs/streamlit_runs/`; file upload tạm được xóa sau phân tích. Cần có `models/pose_landmarker_full.task` tại repository root.
+
+UI hiển thị skeleton overlay, biểu đồ góc gối 2D và độ bao phủ dữ liệu, đồng thời cho tải các artifact. Với upload tên `running_gait_sideview.mp4`, app dùng Ground Truth CSV hiện có nếu frame/timestamp khớp landmarks đã trích xuất. Dashboard khi đó hiển thị kết quả event evaluation, knee angle tại Ground Truth events và cadence; heel-event predictions vẫn được giữ riêng và không được gọi là confirmed foot-strikes. Video khác không dùng nhãn của clip này.
 
 ## Đầu ra
-Tên và cấu trúc cụ thể sẽ được chốt trong quá trình triển khai. Dự kiến gồm:
-- video overlay `.mp4`
-- `metrics.json`
-- bảng dữ liệu `.csv`
-- các biểu đồ
-- cảnh báo chất lượng và metadata
+Mỗi lượt phân tích trong UI tạo một thư mục mới với video overlay gốc `.mp4`, bản H.264 chuyển mã cục bộ để phát trong browser khi encoder sẵn có, landmark JSON, CSV góc gối thô và đã làm mượt, SVG biểu đồ góc gối, cùng CSV/SVG candidate heel-event. Khi đúng video có Ground Truth, pipeline bổ sung CSV/JSON evaluation, match event, knee-angle-at-event, cadence CSV/SVG, summary JSON và báo cáo Markdown trong cùng thư mục. Nếu chuyển mã thất bại, video gốc vẫn được giữ để tải xuống; khả năng phát MP4V phụ thuộc trình duyệt. Cadence lấy từ nhãn Ground Truth và là số bước quan sát được trên thời lượng clip; không suy ra từ candidate.
 
 Không nên commit video cá nhân, file output lớn hoặc model weights vào Git nếu chưa có quyết định rõ.
 
@@ -73,11 +75,4 @@ Xem `ARCHITECTURE.md` để biết luồng dữ liệu và trách nhiệm từng
 - Không có cơ sở để đưa ra chẩn đoán hoặc dự đoán chấn thương.
 
 ## Trạng thái dự án
-Phase 0 setup và Phase 1 video/landmark pipeline đã được triển khai. Phase 1 chưa xác thực chất lượng pose trên video chạy thật(C:\Users\Admin\Documents\Codex\2026-10-18); Phase 2 trở đi (quality assessment, gait events, metrics, charts/reporting và Streamlit UI) chưa được triển khai. Không diễn giải độ tin cậy của model thành độ chính xác sinh cơ học hoặc kết luận y tế.
--đã chạy và cho ra kết quả json và mp4 ở phase 1 (18/10/2026)   
-+ Đầu ra là pose landmarks thô, không phải kết quả phân tích dáng chạy.
-+ Chưa có gait-event detector, cadence, step time, góc gối/knee ROM, biểu đồ hay báo cáo.
-+ Tọa độ 2D chịu ảnh hưởng của góc camera, phối cảnh, che khuất, ánh sáng, độ phân giải và nhiễu landmark.
-+ Timestamp dựa trên FPS nguồn khi FPS hợp lệ; video variable-frame-rate không được khôi phục timestamp chính xác từ metadata OpenCV.
-+ Thành công khi chạy pipeline chỉ xác nhận chương trình xử lý được clip đó; không chứng minh độ chính xác sinh cơ học hoặc khả năng chẩn đoán.
-+ output nằm ở: C:\Users\Admin\Documents\Codex\2026-10-18\github-plugin-github-openai-curated-remote-2\work\running-gait-analysis-phase1-main\outputs
+Các module Phase 1–3 và UI MVP local đã được triển khai trong working tree hiện tại. Có artifact phân tích và manual review cục bộ, nhưng điều đó không xác nhận độ chính xác tổng quát. Heel-event detection vẫn là thử nghiệm; cadence, step time, góc gối tại tiếp đất và knee ROM chưa được cung cấp trong UI. Tọa độ 2D chịu ảnh hưởng của góc camera, phối cảnh, che khuất, ánh sáng, FPS và sai số landmark. Không diễn giải confidence của model thành độ chính xác sinh cơ học hoặc kết luận y tế.

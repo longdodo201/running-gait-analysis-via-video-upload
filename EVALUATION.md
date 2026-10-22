@@ -92,3 +92,13 @@ Báo cáo phải ghi:
 - Giới hạn, bias có thể có và điều gì chưa được kiểm chứng.
 
 Không ghi kết quả dự kiến như kết quả thật. Nếu chưa có dataset, ghi “chưa đánh giá thực nghiệm — cần dữ liệu annotated”, đồng thời cung cấp script và template để chạy sau.
+
+## 7. Ground Truth evaluation hiện có
+
+`outputs/foot_strike_ground_truth.csv` chứa event-level nhãn cho video `running_gait_sideview.mp4`; schema gồm event ID, zero-based frame, timestamp, side, event type, confidence và notes. Confidence/notes đang để trống vì CSV nguồn không cung cấp chúng. Khi chạy đánh giá, frame index và timestamp phải khớp với landmark JSON; pipeline không tự sửa nhãn.
+
+`scripts/evaluate_ground_truth.py` dùng landmarks đã lưu, không chạy lại MediaPipe. Algorithm A là detector heel-y local extrema hiện có. Algorithm B là detector contact-zone riêng dùng foot-index/heel vào vùng gần belt và giới hạn vertical speed. Hai thuật toán chia sẻ pose landmarks; B khác feature và quyết định event nhưng không độc lập về sensor.
+
+Ghép events cùng bên, tối ưu số cặp hợp lệ rồi giảm tổng sai số tuyệt đối, trong tolerance ±2 frames. Signed error là prediction trừ Ground Truth; milliseconds lấy từ timestamp của mỗi frame (với clip CFR 30 FPS tương đương khoảng 33.33 ms/frame). Knee-angle-at-event dùng cùng công thức `angle_2d_degrees` trên hip-knee-ankle, chỉ xuất góc khi landmark confidence đạt ngưỡng 0.5. Cadence là event count chia thời lượng clip nhân 60; chart dùng cửa sổ trailing 2 giây, bước 0.5 giây. Clip dưới 3 giây hoặc ít hơn 4 event không xuất cadence trung bình.
+
+Các con số hiện tại chỉ mô tả một clip và nhãn quan sát bằng video; không phải ước lượng độ chính xác tổng quát hay contact measurement cấp phòng thí nghiệm. Ground Truth file hiện không có confidence reviewer, nên report không suy diễn confidence từ trống.

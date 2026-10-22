@@ -90,6 +90,7 @@ running-gait-analysis/
 - `src/quality.py`: đánh giá độ bao phủ/visibility/occlusion và sinh warning.
 - `src/signal_processing.py`: lọc nhiễu và xử lý chuỗi thời gian có xét timestamp.
 - `src/foot_strike.py`: tạo candidate event từ trajectory; trả cả thời điểm, bên, confidence và lý do/flag.
+- `src/foot_strike_analysis.py`: đọc Ground Truth event CSV, ghép prediction một-một, tính event-level knee angles và cadence; detector contact-zone riêng dùng foot-index/heel vào vùng gần belt với vertical speed thấp.
 - `src/gait_metrics.py`: tính cadence, step time, knee angle/ROM và metric khác từ input đã kiểm tra.
 - `src/analysis_pipeline.py`: điều phối pipeline; không vẽ UI.
 - `src/visualization.py`: overlay skeleton, đánh dấu event và tạo plot.
@@ -141,4 +142,5 @@ running-gait-analysis/
 - Bộ lọc tín hiệu phải xét missing values/occlusion; tránh nội suy qua khoảng mất dữ liệu dài.
 - Phải có quy ước trái/phải nhất quán, đặc biệt với video quay ngang và phía chân bị che khuất.
 - Event detection là phần có độ bất định cao nhất; giữ kết quả candidate và warning để phục vụ đánh giá.
+- Ground Truth evaluation chỉ chạy khi caller cung cấp nhãn cho đúng clip; pipeline không gán nhãn hoặc sửa CSV tự động.
 - Dùng video gốc và kết quả pose để overlay; không thay đổi âm thầm FPS/kích thước khi xuất.
