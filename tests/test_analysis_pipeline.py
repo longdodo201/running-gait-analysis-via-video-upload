@@ -69,6 +69,32 @@ class AnalysisPipelineTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def test_directory_publication_retries_transient_windows_access_denied(self) -> None:
+        source = self.root / ".analysis.tmp-retry"
+        destination = self.root / "analysis-published"
+        source.mkdir()
+        (source / "artifact.txt").write_text("complete", encoding="utf-8")
+        original_rename = analysis.os.rename
+        calls = 0
+
+        def fail_once_then_rename(src, dst):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                error = PermissionError("transient access denied")
+                error.winerror = 5
+                raise error
+            original_rename(src, dst)
+
+        with mock.patch.object(analysis.os, "rename", side_effect=fail_once_then_rename):
+            with mock.patch.object(analysis.time, "sleep") as sleep:
+                analysis._rename_directory_with_retry(source, destination)
+
+        self.assertEqual(calls, 2)
+        sleep.assert_called_once_with(0.1)
+        self.assertFalse(source.exists())
+        self.assertEqual((destination / "artifact.txt").read_text(encoding="utf-8"), "complete")
+
     def _validation(self, path, limits=None):
         return Path(path), self.metadata, self.capture
 

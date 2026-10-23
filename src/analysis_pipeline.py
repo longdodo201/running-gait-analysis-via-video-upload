@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
+import time
 from typing import Any, Callable
 
 from .gait_events import (
@@ -101,6 +102,25 @@ def _run_stage(name: str, operation: Callable[..., Any], *args: Any, **kwargs: A
         return operation(*args, **kwargs)
     except Exception as exc:
         raise AnalysisPipelineError(f"{name} failed: {exc}") from exc
+
+
+def _rename_directory_with_retry(source: Path, destination: Path, attempts: int = 5) -> None:
+    """Retry transient Windows sharing/access errors while publishing a run directory."""
+    for attempt in range(attempts):
+        try:
+            os.rename(source, destination)
+            return
+        except OSError as exc:
+            retryable_windows_error = (
+                os.name == "nt" and getattr(exc, "winerror", None) in {5, 32, 33}
+            )
+            if not retryable_windows_error or attempt + 1 == attempts:
+                raise
+            if destination.exists():
+                raise FileExistsError(
+                    f"Output directory appeared during analysis: {destination}"
+                ) from exc
+            time.sleep(0.1 * (2**attempt))
 
 
 def analyze_video(
@@ -258,7 +278,7 @@ def analyze_video(
         def publish() -> None:
             if destination.exists():
                 raise FileExistsError(f"Output directory appeared during analysis: {destination}")
-            os.rename(temporary_dir, destination)
+            _rename_directory_with_retry(temporary_dir, destination)
 
         _run_stage("Output publication", publish)
     except Exception:
