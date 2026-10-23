@@ -1,78 +1,212 @@
-# Vision-Based Running Gait Analysis System
+# Running Gait Analysis
 
-Ứng dụng phân tích dáng chạy từ video tải lên. MVP hướng tới video một người chạy quay ngang, xử lý offline trên máy cá nhân, sau đó xuất video có overlay, một số metric ước lượng, biểu đồ và dữ liệu JSON/CSV.
+Ứng dụng Streamlit phân tích hậu kỳ video chạy bộ quay ngang. Video được xử lý cục bộ bằng MediaPipe Pose Landmarker; ứng dụng tính góc gối 2D, tạo candidate sự kiện từ quỹ đạo gót chân và hiển thị kết quả. Nếu có Ground Truth phù hợp với video, hệ thống đánh giá candidate, tính góc gối tại event đã gán nhãn và cadence từ nhãn.
 
-> **Lưu ý:** Đây là công cụ học tập/quan sát chuyển động, không phải công cụ chẩn đoán y tế. Chỉ số từ video đơn camera chịu ảnh hưởng của góc quay, phối cảnh, che khuất, FPS và sai số pose estimation.
+> Đây là dự án học tập/quan sát chuyển động, không phải huấn luyện viên realtime, thiết bị đo tiếp xúc hay công cụ chẩn đoán y tế. Video đơn camera 2D chịu ảnh hưởng của góc quay, phối cảnh, che khuất, ánh sáng, FPS và sai số landmark.
 
-## Tính năng dự kiến của MVP
-- Đọc và kiểm tra video.
-- Trích xuất pose bằng model pretrained chạy local.
-- Đánh giá chất lượng landmark và cảnh báo clip không phù hợp.
-- Ước lượng cadence/step time khi phát hiện event đủ tin cậy.
-- Tính góc gối 2D và knee ROM theo định nghĩa đã ghi.
-- Xuất video overlay, chart, JSON/CSV.
-- Giao diện local bằng Streamlit.
+## Chức năng hiện có
 
-Các metric có thể bị ẩn hoặc đánh dấu experimental nếu chưa đủ dữ liệu để tin cậy. Contact time không được xem là phép đo chính xác chỉ từ keypoint cổ chân.
+- Upload video MP4, kiểm tra khả năng giải mã; giới hạn mặc định của ứng dụng là 100 MiB và 60 giây.
+- Trích xuất pose theo frame bằng MediaPipe Pose Landmarker chạy CPU; lưu metadata, timestamp và 33 landmark.
+- Tạo video overlay skeleton, CSV góc gối theo frame, CSV góc đã làm mượt và biểu đồ SVG.
+- Tạo candidate `heel_vertical_low_point_candidate` từ cực đại cục bộ của tọa độ ảnh-y gót chân. Đây là heuristic thử nghiệm, không xác nhận tiếp đất.
+- Khi có Ground Truth cho đúng video, đối chiếu hai thuật toán với nhãn, xuất event metrics, góc gối ở frame Ground Truth và cadence dựa trên nhãn.
+- Hiển thị video, biểu đồ, coverage, quỹ đạo cổ chân và cho tải artifacts từ dashboard.
 
-## Yêu cầu môi trường
-- Windows 64-bit, Python 3.11, suy luận local trên CPU.
-- MediaPipe Pose Landmarker Full float16 v1 là model candidate đầu tiên.
-- MP4, giới hạn đầu vào ứng dụng dự kiến 100 MB và 60 giây; đây không phải giới hạn của MediaPipe.
-- Các dependency trực tiếp đã được pin trong `requirements.txt`.
+Các bước phân tích chạy hậu kỳ sau khi người dùng chọn **Analyze video**; không có phân tích realtime. Visibility/presence là tín hiệu từ model pose, không phải độ chính xác sinh cơ học.
 
-Xem [hướng dẫn cài đặt và xác minh Phase 0](docs/PHASE0_SETUP.md) để tạo môi trường, tải model và kiểm tra SHA-256. Không đặt API key hoặc secret vào repository.
+## Kiến trúc và luồng xử lý
 
-## Phase 1: trích xuất landmark từ video local
+```mermaid
+flowchart TD
+    U[Người dùng tải MP4] --> A[app.py: kiểm tra upload và tạo thư mục run]
+    A --> P[src/analysis_pipeline.py: analyze_video]
+    P --> V[src/video_io.py: xác thực và giải mã tuần tự]
+    V --> E[src/pipeline.py + src/pose_estimator.py: pose từng frame]
+    E --> J[Landmark JSON và video overlay]
+    J --> K[src/gait_metrics.py: góc gối theo frame]
+    J --> Q[src/quality.py: coverage và cờ heuristic]
+    K --> S[src/signal_processing.py: median smoothing]
+    J --> D[src/gait_events.py: heel candidates]
+    K --> O[CSV góc gối và SVG]
+    S --> O
+    D --> C[CSV candidate và SVG chẩn đoán]
+    P --> GT{Có Ground Truth được truyền vào?}
+    GT -- Không --> R[Bỏ qua nhánh evaluation]
+    GT -- Có --> G[src/foot_strike_analysis.py: kiểm tra nhãn và tính metric]
+    D --> G
+    J --> G
+    K --> G
+    G --> X[CSV JSON cadence SVG và Markdown report]
+    J --> UI[app.py: dashboard và downloads]
+    O --> UI
+    C --> UI
+    X --> UI
+```
 
-Phase 1 hiện nhận file MP4 local, kiểm tra khả năng giải mã/metadata và giới hạn ứng dụng (mặc định 100 MiB, 60 giây), sau đó xử lý tuần tự từng frame bằng MediaPipe Pose Landmarker chạy CPU. JSON được ghi vào `outputs/landmarks.json`; có thể yêu cầu thêm video MP4 đã vẽ skeleton. Pipeline không phụ thuộc Streamlit.
+1. `app.py` ghi upload vào file tạm, tạo thư mục kết quả mới dưới `outputs/streamlit_runs/` và gọi pipeline. File tạm được dọn sau khi phân tích.
+2. `src/analysis_pipeline.py` điều phối xác thực video, pose extraction, góc gối, quality diagnostics, smoothing, candidate detection và ghi artifacts.
+3. `src/video_io.py` kiểm tra metadata và giải mã frame. `src/pipeline.py` xử lý từng frame; `src/pose_estimator.py` bao MediaPipe Tasks Pose Landmarker cục bộ. Timestamp hiện được tính từ `frame_index / fps` khi FPS hợp lệ.
+4. `src/gait_metrics.py` tính góc hình học 2D tại gối từ hip-knee-ankle. `src/signal_processing.py` làm mượt median 5 mẫu trên từng đoạn hợp lệ và giữ nguyên khoảng thiếu. `src/quality.py` thống kê coverage và gắn cờ biến thiên lớn liên tiếp theo Tukey; cờ chỉ gợi ý xem lại.
+5. `src/gait_events.py` lấy heel của pose đầu tiên, lọc mẫu thiếu/confidence thấp, làm mượt median 5 frame và tìm cực đại cục bộ trên trục y ảnh (y tăng xuống dưới). Kết quả là candidate điểm thấp của gót, không phải contact đã xác nhận.
+6. Nhánh Ground Truth chỉ chạy nếu caller truyền CSV. Pipeline kiểm tra tên video và metadata nguồn, sau đó `src/foot_strike_analysis.py` đọc nhãn, tạo hai bộ predictions, matching và tính metrics. Module không tự gán nhãn.
+7. Dashboard hiển thị kết quả và cho tải artifacts. H.264 playback được tạo từ overlay nếu bộ chuyển mã khả dụng; MP4V gốc vẫn được giữ.
 
-Sau khi cài dependency và tải model theo [docs/PHASE0_SETUP.md](docs/PHASE0_SETUP.md), chạy từ thư mục gốc:
+## Cấu trúc thư mục và trách nhiệm module
+
+```text
+.
+├── app.py
+├── requirements.txt
+├── outputs/                       # Kết quả và dữ liệu local; bị .gitignore loại khỏi Git
+├── scripts/
+│   ├── process_video.py           # CLI Phase 1
+│   ├── evaluate_ground_truth.py   # Evaluation từ landmarks đã lưu
+│   ├── prepare_event_review.py    # Worksheet/contact sheet xem candidate
+│   └── validate_event_review.py   # Kiểm tra nhãn review
+├── src/
+│   ├── analysis_pipeline.py       # Điều phối phân tích và artifacts
+│   ├── pipeline.py                # Trích xuất landmark theo frame
+│   ├── video_io.py                # Đọc video, metadata, decode
+│   ├── pose_estimator.py           # Adapter MediaPipe Pose Landmarker
+│   ├── landmarks.py                # Schema, JSON, góc hình học
+│   ├── gait_metrics.py             # Góc gối theo frame
+│   ├── quality.py                  # Coverage và cờ heuristic
+│   ├── signal_processing.py        # Median smoothing
+│   ├── gait_events.py              # Candidate từ quỹ đạo gót
+│   ├── foot_strike_analysis.py     # Ground Truth, matching, metrics
+│   ├── manual_review.py             # Worksheet và contact sheet
+│   ├── visualization.py            # SVG và playback quỹ đạo cổ chân
+│   ├── annotation.py                # Ghi overlay skeleton
+│   ├── video_transcoding.py         # Chuyển overlay sang H.264 nếu khả dụng
+│   └── report.py                   # Ghi CSV góc và events
+├── tests/                          # unittest offline với fixtures/mocks
+└── docs/                           # Setup, pipeline và phương pháp đánh giá
+```
+
+| Module | Trách nhiệm | Đầu vào | Đầu ra/phối hợp |
+|---|---|---|---|
+| `app.py` | Upload, điều phối UI, hiển thị và downloads | Video, cấu hình model | Gọi `analyze_video`, hiển thị artifacts trong run mới |
+| `src/analysis_pipeline.py` | Điều phối các bước và bảo vệ output không ghi đè | Video, model, tùy chọn Ground Truth | Gọi modules phân tích; trả `AnalysisResult` |
+| `src/video_io.py` | Kiểm tra MP4, metadata và đọc frame | Đường dẫn video | `VideoMetadata`, frame đã decode |
+| `src/pipeline.py`, `src/pose_estimator.py` | Inference pose theo frame | Frame BGR, model `.task` | Landmark JSON và tùy chọn overlay |
+| `src/landmarks.py` | Schema 33 landmark, serialize, `angle_2d_degrees` | Pose/model output | JSON có cấu trúc và phép tính góc |
+| `src/gait_metrics.py` | Tính góc gối hai bên cho từng frame | Landmark JSON, confidence thresholds | Góc và status theo frame |
+| `src/quality.py`, `src/signal_processing.py` | Chẩn đoán coverage; smoothing theo đoạn liên tục | Dữ liệu góc | Quality flags và cột góc smoothed |
+| `src/gait_events.py` | Phát hiện heel-trajectory candidates | Landmark JSON, tham số detector | `CandidateEvent` và tín hiệu để ghi CSV/plot |
+| `src/foot_strike_analysis.py` | Đọc/kiểm tra nhãn, matching và tính thống kê | Ground Truth, landmarks, predictions | Evaluation, match, góc tại event, cadence, report |
+| `src/visualization.py` | Tạo biểu đồ và ankle playback | Landmark JSON, metric/event rows | SVG/HTML cho dashboard |
+| `src/report.py`, `src/annotation.py`, `src/video_transcoding.py` | Xuất bảng, overlay và chuyển mã | Dữ liệu pipeline/frame | CSV, MP4 overlay, H.264 tùy môi trường |
+| `src/manual_review.py` | Tạo worksheet và context sheet để người xem xét | Candidate CSV, video, review CSV | File review; không tự tạo nhãn |
+| `scripts/evaluate_ground_truth.py` | Chạy evaluation độc lập không inference | Landmark JSON, Ground Truth CSV, output mới | CSV/JSON/SVG/Markdown report |
+
+`outputs/` chứa video, nhãn và kết quả phân tích local. Theo `.gitignore`, toàn bộ thư mục này, `data/local/`, video trong `data/samples/` và model `.task`/`.tflite` không được theo dõi bởi Git. Không đưa video cá nhân, model weights hoặc output lớn lên Git nếu chưa có quyết định rõ.
+
+## Phương pháp phân tích
+
+### Landmarks, góc gối và smoothing
+
+MediaPipe cung cấp 33 landmark cho mỗi pose. `x`/`y` chuẩn hóa theo ảnh; `z` là tọa độ tương đối của model, không phải độ sâu tính bằng mét. Visibility/presence được lưu nếu API có; đây là tín hiệu chất lượng của model, không phải xác suất chính xác.
+
+Góc gối là góc hình học 2D tại knee giữa vector hip-knee và ankle-knee, tính từ tọa độ đã đổi sang pixel. Góc gần 180° biểu thị hai đoạn gần thẳng hàng. Landmark thiếu, confidence dưới ngưỡng hoặc hình học suy biến tạo góc trống với status tương ứng. Median smoothing dùng cửa sổ 5 mẫu riêng trên mỗi đoạn liên tục hợp lệ; khoảng thiếu không được nội suy.
+
+### Candidate foot-strike
+
+Algorithm A (`heel_trajectory_local_extrema`) lọc heel theo visibility/presence ≥ 0.5, đổi y sang pixel theo chiều cao ảnh và median smoothing 5 frame. Detector tìm cực đại cục bộ y với prominence tối thiểu 20 px trong vùng lân cận 30 frame. Candidate cùng bên cách nhau dưới 12 frame được gộp, giữ candidate prominence cao hơn. Event được ghi rõ là `heel_vertical_low_point_candidate` cùng cờ `exploratory_unvalidated`.
+
+Algorithm B (`foot_contact_zone`) chỉ chạy trong evaluation. Nó dùng y thấp hơn giữa heel và foot-index, vùng belt-height heuristic, giới hạn tốc độ dọc và khoảng cách tối thiểu. Ngưỡng belt phụ thuộc camera/treadmill. Hai thuật toán dùng cùng landmarks từ cùng video/model; B không phải sensor độc lập.
+
+Prediction candidate khác Ground Truth: candidate là kết quả heuristic cần đánh giá, còn Ground Truth là nhãn tham chiếu do người annotator ghi. Hệ thống không đo contact time chính xác từ keypoint cổ chân.
+
+### Ground Truth, matching và cadence
+
+Nhãn hiện có tại `outputs/foot_strike_ground_truth.csv` cho `running_gait_sideview.mp4`: 31 event từ frame 27 đến 318; clip có 321 frame, 720 × 878, 30 FPS, dài 10,7 giây. Quy ước nhãn là frame đầu tiên quan sát được giày chạm băng chạy. `label_confidence` và `notes` để trống theo dữ liệu nguồn, không được phần mềm tự suy diễn.
+
+Pipeline kiểm tra tên video, frame/timestamp và metadata nguồn. CLI có thể kiểm tra fingerprint nếu nhận `--source-video`. Matching tách theo bên, một-một; tối đa số cặp hợp lệ trong tolerance ±2 frames rồi giảm tổng sai số tuyệt đối. Signed error là prediction trừ Ground Truth. Metrics gồm TP, FP, FN, Precision, Recall, F1, mean signed timing error và mean absolute timing error theo frame/ms.
+
+Góc gối tại event được tính trên hip-knee-ankle ở frame Ground Truth, với ngưỡng confidence 0.5; dữ liệu không hợp lệ để góc trống. Cadence đếm mỗi event Ground Truth là một bước, chia tổng số event cho toàn bộ thời lượng clip rồi nhân 60. Cadence series dùng cửa sổ 2 giây, bước 0,5 giây. Clip dưới 3 giây hoặc có dưới 4 event không xuất cadence trung bình.
+
+Kết quả đã ghi cho clip này: Algorithm A F1 = 0,867 (trái), 0,933 (phải); Algorithm B F1 = 0,625 (trái), 0,000 (phải). Đây là số liệu mô tả trên **một video**, với nhãn quan sát bằng video; không phải độ chính xác tổng quát hoặc phép đo lực tiếp xúc. Xem thêm [báo cáo Phase 3](docs/PHASE3_GROUND_TRUTH_EVALUATION.md).
+
+## Cài đặt và chạy
+
+Môi trường mục tiêu trong tài liệu là Windows x64/Python 3.11; dependencies trực tiếp được pin trong `requirements.txt`. Phase 0 trước đó ghi nhận dependency và khởi tạo model thành công trên Python 3.12.10; Python 3.11 runtime vẫn cần xác minh riêng. Xem [hướng dẫn Phase 0](docs/PHASE0_SETUP.md) để tải model và kiểm tra checksum.
+
+PowerShell tại thư mục gốc:
 
 ```powershell
-python scripts\process_video.py "data\samples\my_run.mp4" --model "models\pose_landmarker_full.task" --output "outputs\my_run_landmarks.json" --annotated-video "outputs\my_run_annotated.mp4"
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-`--annotated-video` là tùy chọn. Dùng `--max-bytes 0` hoặc `--max-seconds 0` để tắt từng giới hạn; các giới hạn này thuộc cấu hình ứng dụng và không phải giới hạn MediaPipe. Không có video mẫu nào được bao gồm trong repository.
-
-JSON dùng `schema_version` `1.0`, metadata video, quy ước timestamp và danh sách `frames`. Mỗi frame chứa `frame_index`, `timestamp_seconds` (null nếu FPS nguồn không hợp lệ) và `poses`; mỗi pose có map `landmarks` theo tên 33 điểm MediaPipe. Mỗi landmark chứa `x`, `y`, `z` đã chuẩn hóa theo đầu ra model, cùng `visibility` và `presence` nếu API cung cấp. `z` là tọa độ tương đối của model, không phải độ sâu đo theo mét. Đây là dữ liệu pose thô; Phase 1 không tính gait event hay metric.
-
-## Chạy kiểm thử
-```bash
-python -m unittest discover -s tests -v
-```
-
-Unit/integration tests dùng fixture/mocks, chạy offline và không cần model hoặc video thật. Smoke test local tùy chọn: chuẩn bị MP4 có quyền sử dụng, tải và xác minh model theo Phase 0, rồi chạy CLI hoặc UI; kiểm tra video overlay cùng các artifact. Test tự động không chạy inference thật.
-
-## Đánh giá event detector
-Quy trình đánh giá candidate và annotation thủ công ban đầu được mô tả trong [docs/PHASE2_5_EVENT_EVALUATION.md](docs/PHASE2_5_EVENT_EVALUATION.md). Ground Truth event-level hiện có trong `outputs/foot_strike_ground_truth.csv`; so sánh hai thuật toán, góc gối tại các frame đã gán nhãn và cadence được mô tả trong [docs/PHASE3_GROUND_TRUTH_EVALUATION.md](docs/PHASE3_GROUND_TRUTH_EVALUATION.md). Nhãn video là reference quan sát, không phải ground truth cấp phòng thí nghiệm.
-
-## Ứng dụng local sau khi phân tích
-
-Từ thư mục gốc, cài dependencies theo [docs/PHASE0_SETUP.md](docs/PHASE0_SETUP.md), tải model và khởi chạy:
+Tải Pose Landmarker Full float16 v1 theo tài liệu Phase 0 vào `models/pose_landmarker_full.task`, rồi chạy UI:
 
 ```powershell
 streamlit run app.py
 ```
 
-Chọn một MP4 side-view rồi nhấn **Analyze video**. Quá trình chạy cục bộ; giới hạn mặc định là 100 MiB và 60 giây. Mỗi lượt chạy được lưu trong thư mục mới dưới `outputs/streamlit_runs/`; file upload tạm được xóa sau phân tích. Cần có `models/pose_landmarker_full.task` tại repository root.
+Ứng dụng xử lý cục bộ, mặc định tối đa 100 MiB/60 giây. Mỗi lần chạy tạo thư mục mới trong `outputs/streamlit_runs/`. Ground Truth tự được chọn chỉ khi tên upload là `running_gait_sideview.mp4` và CSV có tại `outputs/foot_strike_ground_truth.csv`; pipeline vẫn xác minh dữ liệu nguồn.
 
-UI hiển thị skeleton overlay, biểu đồ góc gối 2D và độ bao phủ dữ liệu, đồng thời cho tải các artifact. Với upload tên `running_gait_sideview.mp4`, app dùng Ground Truth CSV hiện có nếu frame/timestamp khớp landmarks đã trích xuất. Dashboard khi đó hiển thị kết quả event evaluation, knee angle tại Ground Truth events và cadence; heel-event predictions vẫn được giữ riêng và không được gọi là confirmed foot-strikes. Video khác không dùng nhãn của clip này.
+### CLI Phase 1
 
-## Đầu ra
-Mỗi lượt phân tích trong UI tạo một thư mục mới với video overlay gốc `.mp4`, bản H.264 chuyển mã cục bộ để phát trong browser khi encoder sẵn có, landmark JSON, CSV góc gối thô và đã làm mượt, SVG biểu đồ góc gối, cùng CSV/SVG candidate heel-event. Khi đúng video có Ground Truth, pipeline bổ sung CSV/JSON evaluation, match event, knee-angle-at-event, cadence CSV/SVG, summary JSON và báo cáo Markdown trong cùng thư mục. Nếu chuyển mã thất bại, video gốc vẫn được giữ để tải xuống; khả năng phát MP4V phụ thuộc trình duyệt. Cadence lấy từ nhãn Ground Truth và là số bước quan sát được trên thời lượng clip; không suy ra từ candidate.
+```powershell
+python scripts/process_video.py "path/to/run.mp4" `
+  --model "models/pose_landmarker_full.task" `
+  --output "outputs/run_landmarks.json" `
+  --annotated-video "outputs/run_annotated.mp4"
+```
 
-Không nên commit video cá nhân, file output lớn hoặc model weights vào Git nếu chưa có quyết định rõ.
+Bỏ `--annotated-video` nếu không cần overlay. `--max-bytes 0` và `--max-seconds 0` tắt giới hạn tương ứng. CLI Phase 1 chỉ trích xuất pose, không chạy gait event/metric.
 
-## Cấu trúc dự án
-Xem `ARCHITECTURE.md` để biết luồng dữ liệu và trách nhiệm từng module; xem `PLAN.md` để biết các giai đoạn triển khai; xem `AGENTS.md` để biết quy tắc dành cho coding agent.
+### Kiểm thử
 
-## Giới hạn đã biết
-- Ước lượng pose có thể nhiễu hoặc mất landmark khi chân bị che.
-- Góc 2D không phải phép đo 3D sinh cơ học.
-- Foot-strike detection cần đánh giá trên dữ liệu được annotate.
-- Cadence/step time phụ thuộc chất lượng event detection.
-- Không có cơ sở để đưa ra chẩn đoán hoặc dự đoán chấn thương.
+```powershell
+python -m unittest discover -s tests -v
+```
 
-## Trạng thái dự án
-Các module Phase 1–3 và UI MVP local đã được triển khai trong working tree hiện tại. Có artifact phân tích và manual review cục bộ, nhưng điều đó không xác nhận độ chính xác tổng quát. Heel-event detection vẫn là thử nghiệm; cadence, step time, góc gối tại tiếp đất và knee ROM chưa được cung cấp trong UI. Tọa độ 2D chịu ảnh hưởng của góc camera, phối cảnh, che khuất, ánh sáng, FPS và sai số landmark. Không diễn giải confidence của model thành độ chính xác sinh cơ học hoặc kết luận y tế.
+Tests dùng fixtures/mocks và chạy offline, không tải model hoặc cần Internet. Các nhóm gồm góc, xử lý tín hiệu, quality, event detection, Ground Truth analysis, pipeline, video I/O/transcoding, manual review và app. Hãy chạy lại lệnh trên để xác nhận trạng thái trong môi trường của bạn; không mặc định test luôn pass.
+
+### Đánh giá Ground Truth từ dữ liệu đã lưu
+
+Lệnh này không chạy lại MediaPipe. Chọn output directory mới; script từ chối nếu thư mục đó đã tồn tại:
+
+```powershell
+python scripts/evaluate_ground_truth.py `
+  outputs/running_gait_sideview_landmarks.json `
+  outputs/foot_strike_ground_truth.csv `
+  outputs/running_gait_sideview_ground_truth_eval_new `
+  --source-video "path/to/running_gait_sideview.mp4"
+```
+
+Input Ground Truth phải khớp chính xác video và landmark timeline. Không dùng nhãn clip mẫu cho video khác.
+
+## Artifacts
+
+Mỗi lượt `analyze_video` tạo thư mục mới, không ghi đè output directory đã tồn tại. Tên file dùng stem video:
+
+| Artifact | Nội dung |
+|---|---|
+| `<video>_landmarks.json` | Metadata, timestamp và landmarks từng frame |
+| `<video>_annotated.mp4` | Video skeleton overlay MP4V |
+| `<video>_knee_angles_phase22.csv` | Góc gối và status theo frame |
+| `<video>_knee_angles_phase23.csv` | Góc gối kèm cột smoothed |
+| `<video>_knee_angles_phase23.svg` | Biểu đồ góc gối |
+| `<video>_gait_events_phase24.csv` | Candidate heel events và tín hiệu liên quan |
+| `<video>_gait_events_phase24.svg` | Biểu đồ tín hiệu candidate |
+| `foot_strike_evaluation_summary.csv`, `foot_strike_evaluation_matches.csv`, `foot_strike_evaluation.json` | Chỉ khi có Ground Truth: metric và ghép event |
+| `knee_angles_at_ground_truth.csv`, `cadence.csv`, `cadence.svg` | Chỉ khi có Ground Truth: góc tại nhãn và cadence |
+| `ground_truth_metrics_summary.json`, `ground_truth_evaluation_report.md` | Chỉ khi có Ground Truth: tổng hợp và report |
+
+Dashboard có thể tạo thêm bản H.264 để phát trong browser nếu chuyển mã khả dụng; overlay MP4V gốc vẫn được giữ để tải.
+
+## Giới hạn và hướng phát triển
+
+- Ground Truth hiện là quan sát video của một clip, không phải force plate hoặc cảm biến tiếp xúc đồng bộ. Một clip không xác lập hiệu năng tổng quát.
+- Góc nhìn đơn camera không cho phép đo 3D; che khuất và sai số pose ảnh hưởng event và góc.
+- Foot-strike detector là heuristic trên landmarks, chưa được xác thực rộng trên nhiều runner/video. Contact time không được suy ra chính xác từ cổ chân.
+- Góc gối là ước lượng hình học 2D. Cadence trong nhánh Ground Truth lấy từ event nhãn, không lấy từ heel candidates.
+- Hướng phát triển phù hợp: mở rộng video được annotate độc lập, ghi quy tắc và độ đồng thuận người gán nhãn, đánh giá trên người/video riêng biệt rồi mới điều chỉnh detector.
+
+Tài liệu liên quan: [PROJECT_SPEC.md](PROJECT_SPEC.md), [ARCHITECTURE.md](ARCHITECTURE.md), [PLAN.md](PLAN.md), [EVALUATION.md](EVALUATION.md), [docs/](docs/).
