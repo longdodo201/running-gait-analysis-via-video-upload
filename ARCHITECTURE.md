@@ -143,4 +143,5 @@ running-gait-analysis/
 - Phải có quy ước trái/phải nhất quán, đặc biệt với video quay ngang và phía chân bị che khuất.
 - Event detection là phần có độ bất định cao nhất; giữ kết quả candidate và warning để phục vụ đánh giá.
 - Ground Truth evaluation chỉ chạy khi caller cung cấp nhãn cho đúng clip; pipeline không gán nhãn hoặc sửa CSV tự động.
+- Dashboard có thể truyền cache cục bộ cho artifacts pose extraction. Cache phải khớp hash video/model, metadata, runtime/schema và extraction settings; các bước gait analysis và evaluation luôn chạy lại.
 - Dùng video gốc và kết quả pose để overlay; không thay đổi âm thầm FPS/kích thước khi xuất.

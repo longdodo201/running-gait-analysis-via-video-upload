@@ -13,6 +13,22 @@ from .gait_events import CandidateEvent, HeelSignalSample
 from .signal_processing import SMOOTHED_ANGLE_COLUMNS, _finite_number
 
 
+def dashboard_svg_for_display(path: str | Path) -> str:
+    """Read an SVG artifact and adapt its styling for the dark dashboard."""
+    svg = Path(path).read_text(encoding="utf-8")
+    svg = svg.replace(
+        '<svg xmlns=',
+        '<svg style="width:100%;height:auto;max-width:100%;display:block" xmlns=',
+        1,
+    )
+    svg = svg.replace('fill="white"', 'fill="#0d1c27"', 1)
+    svg = svg.replace("fill:#222", "fill:#e8f1f4", 1)
+    svg = svg.replace("stroke:#ddd", "stroke:#263c49", 1)
+    svg = svg.replace("stroke:#555", "stroke:#69808b", 1)
+    svg = svg.replace('stroke="#222"', 'stroke="#d2e0e5"')
+    return svg
+
+
 def _landmark_number(value: Any) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None

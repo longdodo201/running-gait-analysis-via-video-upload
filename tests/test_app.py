@@ -8,6 +8,7 @@ from unittest import mock
 import json
 
 import app
+from src.visualization import dashboard_svg_for_display
 
 
 class FakeUpload:
@@ -146,9 +147,10 @@ class UploadedVideoFlowTests(unittest.TestCase):
 
             calls = []
 
-            def analyzer(video_path, output_dir, *, model_path, progress):
+            def analyzer(video_path, output_dir, *, model_path, progress, cache_dir):
                 calls.append((Path(video_path), Path(output_dir)))
                 self.assertTrue(Path(video_path).is_file())
+                self.assertEqual(cache_dir, app.LANDMARK_CACHE_ROOT)
                 return fake_result(Path(output_dir))
 
             with transcode as transcode_mock:
@@ -178,7 +180,7 @@ class UploadedVideoFlowTests(unittest.TestCase):
             st.columns.return_value = [mock.MagicMock(), mock.MagicMock()]
             st.expander.return_value.__enter__.return_value = None
 
-            def analyzer(_video_path, output_dir, *, model_path, progress):
+            def analyzer(_video_path, output_dir, *, model_path, progress, cache_dir):
                 return fake_result(Path(output_dir))
 
             def create_h264_overlay(source_path):
@@ -303,7 +305,7 @@ class UploadedVideoFlowTests(unittest.TestCase):
             )
             svg_path.write_text(original, encoding="utf-8")
 
-            rendered = app._dashboard_knee_svg(svg_path)
+            rendered = dashboard_svg_for_display(svg_path)
 
             self.assertIn('style="width:100%;height:auto;max-width:100%;display:block"', rendered)
             self.assertIn('fill="#0d1c27"', rendered)

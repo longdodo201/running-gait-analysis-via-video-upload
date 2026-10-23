@@ -13,10 +13,11 @@ import uuid
 from src.analysis_pipeline import AnalysisResult, analyze_video
 from src.video_io import VideoLimits
 from src.video_transcoding import VideoTranscodeError, transcode_overlay_to_h264
-from src.visualization import ankle_trajectory_playback_html
+from src.visualization import ankle_trajectory_playback_html, dashboard_svg_for_display
 
 
 OUTPUT_ROOT = Path("outputs") / "streamlit_runs"
+LANDMARK_CACHE_ROOT = Path("outputs") / "landmark_cache"
 MODEL_PATH = Path("models") / "pose_landmarker_full.task"
 GROUND_TRUTH_PATH = Path("outputs") / "foot_strike_ground_truth.csv"
 MAX_UPLOAD_BYTES = VideoLimits().max_bytes
@@ -80,6 +81,7 @@ def process_uploaded_video(
     analyzer: Callable[..., AnalysisResult] = analyze_video,
     progress: Callable[[str], None] | None = None,
     ground_truth_path: str | Path | None = None,
+    cache_dir: str | Path | None = None,
 ) -> AnalysisResult:
     """Copy an uploaded MP4 to a temporary file and analyze it exactly once.
 
@@ -105,6 +107,8 @@ def process_uploaded_video(
         temporary_path.write_bytes(content)
         output_dir = new_run_output_dir(output_root, filename)
         analyzer_kwargs: dict[str, Any] = {"model_path": model_path, "progress": progress}
+        if cache_dir is not None:
+            analyzer_kwargs["cache_dir"] = cache_dir
         selected_ground_truth = Path(ground_truth_path) if ground_truth_path is not None else None
         if selected_ground_truth is None and Path(filename).stem.lower() == "running_gait_sideview":
             if GROUND_TRUTH_PATH.is_file():
@@ -150,27 +154,6 @@ def _analysis_error_message(error: Exception) -> str:
             f"Details: {message}"
         )
     return f"Analysis could not be completed: {message}"
-
-
-def _dashboard_svg(path: Path) -> str:
-    """Adapt a generated plot SVG for a responsive dark dashboard display."""
-    svg = path.read_text(encoding="utf-8")
-    svg = svg.replace(
-        '<svg xmlns=',
-        '<svg style="width:100%;height:auto;max-width:100%;display:block" xmlns=',
-        1,
-    )
-    svg = svg.replace('fill="white"', 'fill="#0d1c27"', 1)
-    svg = svg.replace("fill:#222", "fill:#e8f1f4", 1)
-    svg = svg.replace("stroke:#ddd", "stroke:#263c49", 1)
-    svg = svg.replace("stroke:#555", "stroke:#69808b", 1)
-    svg = svg.replace('stroke="#222"', 'stroke="#d2e0e5"')
-    return svg
-
-
-def _dashboard_knee_svg(path: Path) -> str:
-    """Keep the knee-plot rendering helper explicit at its call site."""
-    return _dashboard_svg(path)
 
 
 def _render_future_signal_cards(st: Any, result: AnalysisResult) -> None:
@@ -238,7 +221,7 @@ def _render_future_signal_cards(st: Any, result: AnalysisResult) -> None:
             cadence_svg = getattr(result, "cadence_svg", None)
             if cadence_svg is not None and Path(cadence_svg).is_file():
                 with st.expander("Cadence over time"):
-                    st.markdown(_dashboard_svg(Path(cadence_svg)), unsafe_allow_html=True)
+                    st.markdown(dashboard_svg_for_display(Path(cadence_svg)), unsafe_allow_html=True)
             return
         except (OSError, ValueError, KeyError, TypeError) as exc:
             st.warning(f"Ground Truth metrics could not be displayed: {exc}")
@@ -306,7 +289,7 @@ def _show_result(
         with st.container(border=True):
             st.markdown('<div class="dashboard-eyebrow">Angle analysis</div>', unsafe_allow_html=True)
             st.subheader("Knee angle over time")
-            st.markdown(_dashboard_knee_svg(result.knee_angles_svg), unsafe_allow_html=True)
+            st.markdown(dashboard_svg_for_display(result.knee_angles_svg), unsafe_allow_html=True)
             st.caption("2D angle estimates in degrees. Missing or unusable samples remain visible as gaps.")
 
             st.markdown('<div class="dashboard-eyebrow">Data quality</div>', unsafe_allow_html=True)
@@ -343,7 +326,7 @@ def _show_result(
         "are kept separate and are the source for reported cadence and knee angles."
     )
     with st.expander("Review exploratory heel-event signal"):
-        st.markdown(_dashboard_svg(result.gait_events_svg), unsafe_allow_html=True)
+        st.markdown(dashboard_svg_for_display(result.gait_events_svg), unsafe_allow_html=True)
 
     with st.expander("Download analysis files"):
         downloads = []
@@ -392,6 +375,7 @@ def render_app(
     output_root: str | Path = OUTPUT_ROOT,
     model_path: str | Path = MODEL_PATH,
     analyzer: Callable[..., AnalysisResult] = analyze_video,
+    cache_dir: str | Path | None = LANDMARK_CACHE_ROOT,
 ) -> None:
     """Render the app against a Streamlit-compatible object (injectable in tests)."""
     st.markdown(DASHBOARD_STYLES, unsafe_allow_html=True)
@@ -433,6 +417,7 @@ def render_app(
                     model_path=model_path,
                     analyzer=analyzer,
                     progress=report_progress,
+                    cache_dir=cache_dir,
                 )
                 status.write("Preparing a browser-compatible H.264 overlay from the generated skeleton video…")
                 try:

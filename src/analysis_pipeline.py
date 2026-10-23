@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 import json
+import logging
 import os
 from pathlib import Path
 import shutil
@@ -25,6 +26,7 @@ from .gait_events import (
     validate_phase23_alignment,
 )
 from .gait_metrics import KneeAngleRow, knee_angle_rows
+from .landmark_cache import LandmarkExtractionCache, landmark_cache_key
 from .foot_strike_analysis import (
     ContactZoneParameters,
     candidates_to_predictions,
@@ -44,6 +46,9 @@ from .report import (
 from .signal_processing import add_smoothed_knee_angles
 from .video_io import VideoLimits, validate_video
 from .visualization import write_gait_event_diagnostic_svg, write_knee_angle_plot_svg
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 class AnalysisPipelineError(RuntimeError):
@@ -115,13 +120,14 @@ def analyze_video(
     contact_zone_parameters: ContactZoneParameters | None = None,
     matching_tolerance_frames: int = 2,
     progress: Callable[[str], None] | None = None,
+    cache_dir: str | Path | None = None,
 ) -> AnalysisResult:
     """Run existing Phase 1–2.4 stages and publish seven artifacts for an MP4.
 
     Relative video/model/output paths are interpreted from the current working
     directory, matching the existing scripts and model-path behavior. A
-    matching existing landmarks file is not reused because the current JSON
-    records only the source basename, which cannot identify a video reliably.
+    Landmark caching is opt-in. Cache entries are keyed by the source and model
+    content plus extraction context; downstream gait calculations always run.
     """
     source = Path(video_path).expanduser().resolve()
     model = Path(model_path).expanduser().resolve()
@@ -134,10 +140,25 @@ def analyze_video(
 
     # Validate decoder access and configured limits before model initialization.
     capture = _run_stage("Video validation", validate_video, source, limits)
+    metadata = capture[1]
     try:
         capture[2].release()
     except Exception as exc:
         raise AnalysisPipelineError(f"Video validation cleanup failed: {exc}") from exc
+
+    extraction_cache: LandmarkExtractionCache | None = None
+    extraction_cache_key: str | None = None
+    if cache_dir is not None:
+        cache_root = Path(cache_dir).expanduser().resolve()
+        _check_no_path_overlap(cache_root, source, model)
+        if _is_same_or_within(cache_root, destination) or _is_same_or_within(destination, cache_root):
+            raise ValueError("Output directory and landmark cache directory must not overlap.")
+        extraction_cache = LandmarkExtractionCache(cache_root)
+        try:
+            extraction_cache_key = landmark_cache_key(source, model, metadata)
+        except (OSError, TypeError, ValueError) as exc:
+            LOGGER.warning("Landmark cache is unavailable; continuing without cache: %s", exc)
+            extraction_cache = None
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary_dir = Path(tempfile.mkdtemp(prefix=f".{destination.name}.tmp-", dir=destination.parent))
@@ -152,16 +173,46 @@ def analyze_video(
         "gait_events_svg": temporary_dir / f"{stem}_gait_events_phase24.svg",
     }
     try:
-        _run_stage(
-            "Landmark extraction",
-            extract_video,
-            source,
-            model,
-            paths["landmarks_json"],
-            annotated_video=paths["annotated_video"],
-            limits=limits,
-            progress=progress if progress is not None else (lambda _message: None),
-        )
+        cache_hit = False
+        if extraction_cache is not None and extraction_cache_key is not None:
+            cache_hit = extraction_cache.restore(
+                extraction_cache_key,
+                source_name=source.name,
+                metadata=metadata,
+                landmarks_destination=paths["landmarks_json"],
+                annotated_video_destination=paths["annotated_video"],
+            )
+        progress_callback = progress if progress is not None else (lambda _message: None)
+        if cache_hit:
+            progress_callback("Landmark cache hit; reusing verified pose extraction artifacts.")
+        else:
+            if extraction_cache is not None:
+                progress_callback("Landmark cache miss; extracting pose from video.")
+            _run_stage(
+                "Landmark extraction",
+                extract_video,
+                source,
+                model,
+                paths["landmarks_json"],
+                annotated_video=paths["annotated_video"],
+                limits=limits,
+                progress=progress_callback,
+            )
+            if extraction_cache is not None and extraction_cache_key is not None:
+                try:
+                    current_key = landmark_cache_key(source, model, metadata)
+                    if current_key == extraction_cache_key:
+                        extraction_cache.store(
+                            extraction_cache_key,
+                            source_name=source.name,
+                            metadata=metadata,
+                            landmarks_source=paths["landmarks_json"],
+                            annotated_video_source=paths["annotated_video"],
+                        )
+                    else:
+                        LOGGER.warning("Video or model changed during extraction; cache entry was not stored.")
+                except (OSError, TypeError, ValueError) as exc:
+                    LOGGER.warning("Could not store landmark cache entry; analysis continues: %s", exc)
 
         def load_landmarks() -> dict[str, Any]:
             with paths["landmarks_json"].open("r", encoding="utf-8") as stream:

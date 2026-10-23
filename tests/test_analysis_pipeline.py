@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -10,7 +11,7 @@ from unittest import mock
 
 import src.analysis_pipeline as analysis
 from src.gait_events import EventDetectionParameters
-from src.landmarks import ExtractionDocument, Landmark, LandmarkFrame, Pose, write_json
+from src.landmarks import LANDMARK_NAMES, ExtractionDocument, Landmark, LandmarkFrame, Pose, write_json
 from src.video_io import VideoMetadata
 
 
@@ -47,6 +48,30 @@ def _document(frame_count: int = 15) -> ExtractionDocument:
                "duration_seconds": frame_count / 30, "warnings": ()},
         timestamp_basis="frame_index / source_fps",
         warnings=(),
+        frames=frames,
+    )
+
+
+def _cacheable_document() -> ExtractionDocument:
+    document = _document()
+    default_landmarks = {
+        name: Landmark(0.5, 0.5, 0.0, 0.95, 0.95)
+        for name in LANDMARK_NAMES
+    }
+    frames = tuple(
+        LandmarkFrame(
+            frame.frame_index,
+            frame.timestamp_seconds,
+            (Pose({**default_landmarks, **frame.poses[0].landmarks}),),
+        )
+        for frame in document.frames
+    )
+    return ExtractionDocument(
+        schema_version=document.schema_version,
+        source_video=document.source_video,
+        video=document.video,
+        timestamp_basis=document.timestamp_basis,
+        warnings=document.warnings,
         frames=frames,
     )
 
@@ -247,6 +272,51 @@ class AnalysisPipelineTests(unittest.TestCase):
         self.assertIs(caught.exception.__cause__, failure)
         self.assertFalse(self.output.exists())
         self.assertEqual(list(self.root.glob(".analysis.tmp-*")), [])
+
+    def test_cache_hit_reuses_extraction_but_recomputes_outputs(self) -> None:
+        self.source_document = _cacheable_document()
+        cache_dir = self.root / "cache"
+        first_output = self.root / "analysis-first"
+        second_output = self.root / "analysis-second"
+        validation, extraction = self._successful_patches()
+        with validation, extraction:
+            first = analysis.analyze_video(
+                self.video, first_output, self.model, cache_dir=cache_dir
+            )
+            progress = mock.Mock()
+            second = analysis.analyze_video(
+                self.video, second_output, self.model, cache_dir=cache_dir, progress=progress
+            )
+
+        self.assertEqual(self.extraction_calls, 1)
+        self.assertTrue(any("cache hit" in call.args[0].lower() for call in progress.call_args_list))
+        first_artifacts = {path.name: path.read_bytes() for path in first_output.iterdir()}
+        second_artifacts = {path.name: path.read_bytes() for path in second_output.iterdir()}
+        self.assertEqual(first_artifacts, second_artifacts)
+        self.assertTrue(first.landmarks_json.is_file())
+        self.assertTrue(second.annotated_video.is_file())
+
+    def test_corrupt_cache_entry_recomputes_extraction(self) -> None:
+        self.source_document = _cacheable_document()
+        cache_dir = self.root / "cache"
+        validation, extraction = self._successful_patches()
+        with validation, extraction:
+            analysis.analyze_video(
+                self.video, self.root / "analysis-first", self.model, cache_dir=cache_dir
+            )
+            cached_landmarks = next(cache_dir.glob("*.landmarks.json"))
+            cached_landmarks.write_text("corrupt", encoding="utf-8")
+            result = analysis.analyze_video(
+                self.video, self.root / "analysis-second", self.model, cache_dir=cache_dir
+            )
+
+        self.assertEqual(self.extraction_calls, 2)
+        self.assertTrue(result.landmarks_json.is_file())
+        manifest_path = next(cache_dir.glob("*.manifest.json"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        current_cache = cache_dir / manifest["artifacts"]["landmarks_json"]
+        self.assertNotEqual(current_cache, cached_landmarks)
+        self.assertEqual(json.loads(current_cache.read_text(encoding="utf-8"))["schema_version"], "1.0")
 
 
 if __name__ == "__main__":

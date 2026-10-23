@@ -12,6 +12,7 @@
 - Tạo candidate `heel_vertical_low_point_candidate` từ cực đại cục bộ của tọa độ ảnh-y gót chân. Đây là heuristic thử nghiệm, không xác nhận tiếp đất.
 - Khi có Ground Truth cho đúng video, đối chiếu hai thuật toán với nhãn, xuất event metrics, góc gối ở frame Ground Truth và cadence dựa trên nhãn.
 - Hiển thị video, biểu đồ, coverage, quỹ đạo cổ chân và cho tải artifacts từ dashboard.
+- Dashboard có cache tùy chọn cho artifacts pose extraction, giúp bỏ qua MediaPipe khi phân tích lại cùng nội dung video/model.
 
 Các bước phân tích chạy hậu kỳ sau khi người dùng chọn **Analyze video**; không có phân tích realtime. Visibility/presence là tín hiệu từ model pose, không phải độ chính xác sinh cơ học.
 
@@ -51,6 +52,10 @@ flowchart TD
 5. `src/gait_events.py` lấy heel của pose đầu tiên, lọc mẫu thiếu/confidence thấp, làm mượt median 5 frame và tìm cực đại cục bộ trên trục y ảnh (y tăng xuống dưới). Kết quả là candidate điểm thấp của gót, không phải contact đã xác nhận.
 6. Nhánh Ground Truth chỉ chạy nếu caller truyền CSV. Pipeline kiểm tra tên video và metadata nguồn, sau đó `src/foot_strike_analysis.py` đọc nhãn, tạo hai bộ predictions, matching và tính metrics. Module không tự gán nhãn.
 7. Dashboard hiển thị kết quả và cho tải artifacts. H.264 playback được tạo từ overlay nếu bộ chuyển mã khả dụng; MP4V gốc vẫn được giữ.
+
+Dashboard dùng cache tại `outputs/landmark_cache/`. Cache được khóa theo SHA-256 nội dung video và model, metadata video, phiên bản MediaPipe/OpenCV, schema và cấu hình pose extraction. Landmark JSON cùng overlay được kiểm tra hash/schema trước khi dùng; cache thiếu, hỏng hoặc không tương thích sẽ dẫn đến pose extraction lại. Chỉ kết quả pose được tái sử dụng: góc, smoothing, candidate events và Ground Truth evaluation vẫn được tính lại theo cấu hình lượt chạy.
+
+Cache nằm trong `outputs/` và bị `.gitignore` loại khỏi Git. Nó giữ thêm landmark JSON và overlay để tái sử dụng; khi muốn thu hồi dung lượng, có thể xóa riêng `outputs/landmark_cache/` lúc không có lượt phân tích đang chạy.
 
 ## Cấu trúc thư mục và trách nhiệm module
 
