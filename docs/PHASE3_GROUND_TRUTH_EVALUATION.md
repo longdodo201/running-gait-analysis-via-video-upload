@@ -19,7 +19,11 @@ Both algorithms consume the same saved landmarks and compare with the same event
 
 For each Ground Truth event, knee angle uses the existing 2D angle at the knee between hip-knee and ankle-knee vectors. A straight leg is approximately 180°. The event CSV includes per-landmark visibility/presence, minimum confidence, status and validity; missing or low-confidence geometry produces a blank angle.
 
+For every analyzed video, independently of Ground Truth, the pipeline also calculates the left/right knee-angle series and reports each side's valid-frame count, coverage percentage and mean valid angle. The usual confidence checks still apply (visibility and presence ≥ 0.5 for hip, knee and ankle). A mean is a descriptive 2D estimate, not a validated biomechanical measurement.
+
 Cadence counts each valid left or right Ground Truth event as one step and reports event count divided by full clip duration × 60. The time series uses trailing 2-second half-open windows stepped every 0.5 seconds. Fewer than four events or a clip shorter than three seconds yields no clip-average number. A single clip with partial cycles at its boundaries may bias the average.
+
+Separately, normal inference calculates an exploratory cadence from the existing heel-trajectory candidate detector without requiring a label file or a specific source filename. It deduplicates same-side/frame rows, then keeps the higher-prominence candidate when opposite-side candidates are closer than the configurable 0.15-second minimum spacing. It uses retained event timestamps and decoded duration, and reports a mean only with at least four retained candidates over at least three seconds. This candidate-based estimate is not validated and is never substituted for Ground Truth cadence in evaluation.
 
 ## Reproduce from saved data (without MediaPipe)
 
@@ -33,7 +37,7 @@ python scripts/evaluate_ground_truth.py `
   --source-video "path/to/running_gait_sideview.mp4"
 ```
 
-The analysis writes event summary/matches CSV and JSON, event-level knee angles, cadence CSV/SVG, a combined metrics JSON and a Markdown report. Streamlit automatically selects the current Ground Truth only for an upload named `running_gait_sideview.mp4`; the pipeline additionally checks source filename and Ground Truth frame/timestamp alignment. Other videos do not inherit these labels.
+The evaluation writes event summary/matches CSV and JSON, event-level knee angles, Ground Truth cadence CSV/SVG, a combined metrics JSON and a Markdown report. Streamlit automatically selects the current Ground Truth only for an upload named `running_gait_sideview.mp4`; the pipeline additionally checks source filename and Ground Truth frame/timestamp alignment. Other videos still receive inference-only knee-angle and candidate-cadence outputs, with Ground Truth evaluation unavailable unless matching labels are supplied.
 
 ## Limits
 

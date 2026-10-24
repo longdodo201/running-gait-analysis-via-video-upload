@@ -174,7 +174,58 @@ def _dashboard_knee_svg(path: Path) -> str:
 
 
 def _render_future_signal_cards(st: Any, result: AnalysisResult) -> None:
-    """Show Ground Truth-derived cadence and knee-angle metrics when available."""
+    """Show inference metrics for every video and Ground Truth details when available."""
+    cadence = getattr(result, "cadence_summary", None) or {}
+    cadence_value = cadence.get("average_cadence_steps_per_minute")
+    cadence_status = cadence.get("status", "insufficient_events")
+    cadence_text = (
+        f"{cadence_value:.1f} steps/min"
+        if isinstance(cadence_value, (int, float)) and cadence_status == "ok"
+        else "Insufficient events" if cadence_status == "insufficient_events"
+        else "Unavailable"
+    )
+    duration = cadence.get("duration_seconds")
+    duration_text = f"{duration:.2f} s" if isinstance(duration, (int, float)) else "duration unavailable"
+    cadence_note = (
+        f"{cadence.get('retained_event_count', 0)} of {cadence.get('candidate_event_count', 0)} "
+        f"candidates retained · {duration_text} · exploratory estimate"
+    )
+    side_quality = {
+        "left": getattr(result, "left_quality", None),
+        "right": getattr(result, "right_quality", None),
+    }
+    knee_cards = []
+    for side, label in (("left", "Left knee angle"), ("right", "Right knee angle")):
+        quality = side_quality[side]
+        count = getattr(quality, "usable_angle_count", 0)
+        percentage = getattr(quality, "valid_frame_percentage", 0.0)
+        angle = getattr(quality, "mean_knee_angle_deg", None)
+        angle_text = f"{angle:.1f}° mean" if isinstance(angle, (int, float)) else "Insufficient data"
+        knee_cards.append(
+            f'<div class="future-signal-card"><div class="future-signal-card__label">{label} · all frames</div>'
+            f'<div class="future-signal-card__value">{angle_text}</div>'
+            f'<div class="future-signal-card__note">{count} valid frames · {percentage:.1f}% coverage; '
+            "2D hip-knee-ankle angle, independent of Ground Truth and detected events.</div></div>"
+        )
+    st.markdown(
+        '<div class="future-signal-grid">'
+        f'<div class="future-signal-card"><div class="future-signal-card__label">Cadence · candidate estimate</div>'
+        f'<div class="future-signal-card__value">{cadence_text}</div>'
+        f'<div class="future-signal-card__note">{cadence_note}</div></div>'
+        + "".join(knee_cards)
+        + "</div>",
+        unsafe_allow_html=True,
+    )
+    if cadence_status != "ok":
+        st.warning(cadence.get("warning", "Cadence is unavailable because too few candidate events were detected."))
+    for warning in getattr(result, "analysis_warnings", ()):
+        st.warning(warning)
+    st.caption(
+        "Cadence counts retained heel-trajectory candidates divided by decoded video duration × 60; "
+        "these candidates are exploratory and are not confirmed foot-strikes. Knee-angle means use "
+        "all valid hip-knee-ankle frames; straight leg ≈ 180°."
+    )
+
     metrics_path = getattr(result, "ground_truth_metrics_json", None)
     if metrics_path is not None and Path(metrics_path).is_file():
         try:
@@ -242,23 +293,6 @@ def _render_future_signal_cards(st: Any, result: AnalysisResult) -> None:
             return
         except (OSError, ValueError, KeyError, TypeError) as exc:
             st.warning(f"Ground Truth metrics could not be displayed: {exc}")
-    st.markdown(
-        """
-        <div class="future-signal-grid">
-          <div class="future-signal-card">
-            <div class="future-signal-card__label">Cadence</div>
-            <div class="future-signal-card__value">Not available</div>
-            <div class="future-signal-card__note">Needs validated step events and a full-clip reference.</div>
-          </div>
-          <div class="future-signal-card">
-            <div class="future-signal-card__label">Knee angle at foot-strike</div>
-            <div class="future-signal-card__value">Not available</div>
-            <div class="future-signal-card__note">Current heel events are exploratory candidates, not confirmed contacts.</div>
-          </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
 
 
 def _show_result(
@@ -320,6 +354,7 @@ def _show_result(
                     unsafe_allow_html=True,
                 )
                 column.metric("Usable frames", quality.usable_angle_count)
+                column.metric("Valid coverage", f"{quality.valid_frame_percentage:.1f}%")
                 column.metric("Missing / unusable", quality.missing_angle_count)
                 column.caption(f"Large-change flags: {len(quality.large_change_flags)} (heuristic review cue)")
             st.caption("Coverage and flags describe the video data, not biomechanical accuracy.")
@@ -339,8 +374,8 @@ def _show_result(
     except (OSError, ValueError, TypeError) as exc:
         st.warning(f"The ankle trajectory is unavailable because the landmark data could not be read: {exc}")
     st.warning(
-        "Heel-trajectory events are experimental candidates only and exploratory predictions. Ground Truth labels, when available, "
-        "are kept separate and are the source for reported cadence and knee angles."
+        "Candidate cadence is an exploratory estimate from heel-trajectory events, not confirmed contact timing. "
+        "Ground Truth evaluation remains separate; general knee-angle statistics use all valid frames."
     )
     with st.expander("Review exploratory heel-event signal"):
         st.markdown(_dashboard_svg(result.gait_events_svg), unsafe_allow_html=True)
@@ -375,6 +410,16 @@ def _show_result(
         downloads.extend(
             (label, Path(path), mime, None)
             for label, path, mime in extra_downloads
+            if path is not None
+        )
+        diagnostic_downloads = (
+            ("Candidate cadence windows (CSV)", getattr(result, "candidate_cadence_csv", None), "text/csv"),
+            ("Candidate cadence summary (JSON)", getattr(result, "candidate_cadence_summary_json", None), "application/json"),
+            ("Analysis diagnostics (JSON)", getattr(result, "diagnostics_json", None), "application/json"),
+        )
+        downloads.extend(
+            (label, Path(path), mime, None)
+            for label, path, mime in diagnostic_downloads
             if path is not None
         )
         for label, path, mime, cached_data in downloads:

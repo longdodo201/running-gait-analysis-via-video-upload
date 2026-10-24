@@ -19,6 +19,8 @@ class KneeAngleQualityTests(unittest.TestCase):
         result = diagnose_knee_angles(rows, "left")
         self.assertEqual(result.missing_angle_count, 1)
         self.assertEqual(result.usable_angle_count, 8)
+        self.assertAlmostEqual(result.valid_frame_percentage, 8 / 9 * 100)
+        self.assertAlmostEqual(result.mean_knee_angle_deg, 110.25)
         self.assertEqual(result.status_counts, {"low_confidence": 1, "ok": 8})
         self.assertEqual(result.adjacent_change_count, 7)
         self.assertEqual(len(result.large_change_flags), 1)
@@ -36,6 +38,7 @@ class KneeAngleQualityTests(unittest.TestCase):
         self.assertEqual(result.adjacent_change_count, 0)
         self.assertEqual(result.large_change_flags, ())
         self.assertIsNone(result.tukey_cutoff_deg)
+        self.assertAlmostEqual(result.valid_frame_percentage, 2 / 3 * 100)
 
     def test_rejects_unknown_side(self) -> None:
         with self.assertRaisesRegex(ValueError, "left.*right"):

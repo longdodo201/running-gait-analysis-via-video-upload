@@ -10,6 +10,8 @@
 - Trích xuất pose theo frame bằng MediaPipe Pose Landmarker chạy CPU; lưu metadata, timestamp và 33 landmark.
 - Tạo video overlay skeleton, CSV góc gối theo frame, CSV góc đã làm mượt và biểu đồ SVG.
 - Tạo candidate `heel_vertical_low_point_candidate` từ cực đại cục bộ của tọa độ ảnh-y gót chân. Đây là heuristic thử nghiệm, không xác nhận tiếp đất.
+- Tính cadence ước lượng từ candidate, độc lập Ground Truth; nếu quá ít event hoặc clip quá ngắn, ghi rõ trạng thái thay vì tạo số trung bình.
+- Tính góc gối trái/phải trên mọi frame đủ landmark/confidence; báo số frame hợp lệ, phần trăm coverage và trung bình mỗi bên.
 - Khi có Ground Truth cho đúng video, đối chiếu hai thuật toán với nhãn, xuất event metrics, góc gối ở frame Ground Truth và cadence dựa trên nhãn.
 - Hiển thị video, biểu đồ, coverage, quỹ đạo cổ chân và cho tải artifacts từ dashboard.
 
@@ -126,6 +128,8 @@ Pipeline kiểm tra tên video, frame/timestamp và metadata nguồn. CLI có th
 
 Góc gối tại event được tính trên hip-knee-ankle ở frame Ground Truth, với ngưỡng confidence 0.5; dữ liệu không hợp lệ để góc trống. Cadence đếm mỗi event Ground Truth là một bước, chia tổng số event cho toàn bộ thời lượng clip rồi nhân 60. Cadence series dùng cửa sổ 2 giây, bước 0,5 giây. Clip dưới 3 giây hoặc có dưới 4 event không xuất cadence trung bình.
 
+Trong suy luận thông thường, pipeline cũng báo cadence thử nghiệm từ các heel low-point candidates hiện có, không phụ thuộc tên video hoặc Ground Truth. Candidate trùng frame/bên được gộp; các ứng viên hai bên cách nhau dưới 0,15 giây chỉ giữ ứng viên có prominence cao hơn. Cadence là retained candidate count / decoded duration × 60, với tối thiểu 4 event và 3 giây; đây không phải cadence đã xác thực. `analysis_diagnostics.json` lưu metadata video, coverage landmark/góc gối, số candidate theo bên, số event giữ lại và cảnh báo. `candidate_cadence.csv` và `candidate_cadence_summary.json` lưu kết quả cadence inference riêng với evaluation Ground Truth.
+
 Kết quả đã ghi cho clip này: Algorithm A F1 = 0,867 (trái), 0,933 (phải); Algorithm B F1 = 0,625 (trái), 0,000 (phải). Đây là số liệu mô tả trên **một video**, với nhãn quan sát bằng video; không phải độ chính xác tổng quát hoặc phép đo lực tiếp xúc. Xem thêm [báo cáo Phase 3](docs/PHASE3_GROUND_TRUTH_EVALUATION.md).
 
 ## Cài đặt và chạy
@@ -195,6 +199,8 @@ Mỗi lượt `analyze_video` tạo thư mục mới, không ghi đè output dir
 | `<video>_knee_angles_phase23.svg` | Biểu đồ góc gối |
 | `<video>_gait_events_phase24.csv` | Candidate heel events và tín hiệu liên quan |
 | `<video>_gait_events_phase24.svg` | Biểu đồ tín hiệu candidate |
+| `candidate_cadence.csv`, `candidate_cadence_summary.json` | Cadence inference thử nghiệm từ heel candidates; luôn tách khỏi Ground Truth |
+| `analysis_diagnostics.json` | Metadata video, coverage landmark/góc gối, số candidate và cảnh báo |
 | `foot_strike_evaluation_summary.csv`, `foot_strike_evaluation_matches.csv`, `foot_strike_evaluation.json` | Chỉ khi có Ground Truth: metric và ghép event |
 | `knee_angles_at_ground_truth.csv`, `cadence.csv`, `cadence.svg` | Chỉ khi có Ground Truth: góc tại nhãn và cadence |
 | `ground_truth_metrics_summary.json`, `ground_truth_evaluation_report.md` | Chỉ khi có Ground Truth: tổng hợp và report |

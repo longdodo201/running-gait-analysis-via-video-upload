@@ -52,7 +52,10 @@ def fake_result(output_dir: Path) -> SimpleNamespace:
         else:
             path.write_text("<svg/>" if path.suffix == ".svg" else "artifact", encoding="utf-8")
         paths[name] = path
-    quality = SimpleNamespace(usable_angle_count=8, missing_angle_count=2, large_change_flags=())
+    quality = SimpleNamespace(
+        usable_angle_count=8, missing_angle_count=2, valid_frame_percentage=80.0,
+        mean_knee_angle_deg=150.0, large_change_flags=(),
+    )
     return SimpleNamespace(
         annotated_video=paths["runner_annotated.mp4"],
         landmarks_json=paths["runner_landmarks.json"],
@@ -118,6 +121,24 @@ class UploadedVideoFlowTests(unittest.TestCase):
                 app.process_uploaded_video(upload, output_root=root / "runs", analyzer=analyzer)
             self.assertEqual(observed["ground_truth_path"], ground_truth)
             self.assertEqual(observed["video_name"], "running_gait_sideview.mp4")
+
+    def test_other_video_name_does_not_require_ground_truth(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ground_truth = root / "foot_strike_ground_truth.csv"
+            ground_truth.write_text("header\n", encoding="utf-8")
+            observed: dict[str, object] = {}
+
+            def analyzer(_video_path, _output_dir, **kwargs):
+                observed.update(kwargs)
+                return "result"
+
+            upload = FakeUpload()
+            upload.name = "another_treadmill_run.mp4"
+            with mock.patch.object(app, "GROUND_TRUTH_PATH", ground_truth):
+                result = app.process_uploaded_video(upload, output_root=root / "runs", analyzer=analyzer)
+            self.assertEqual(result, "result")
+            self.assertNotIn("ground_truth_path", observed)
 
     def test_non_mp4_and_empty_upload_are_rejected_before_analysis(self) -> None:
         analyzer = mock.Mock()
@@ -236,7 +257,7 @@ class UploadedVideoFlowTests(unittest.TestCase):
         self.assertIn("could not be encoded", message)
         self.assertIn("MP4V encoder", message)
 
-    def test_dashboard_keeps_unavailable_metrics_explicit_and_side_colors_consistent(self) -> None:
+    def test_dashboard_shows_inference_metrics_without_ground_truth(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             result = fake_result(Path(temporary) / "result")
             st = mock.MagicMock()
@@ -249,19 +270,22 @@ class UploadedVideoFlowTests(unittest.TestCase):
                 str(call.args[0]) for call in st.markdown.call_args_list if call.args
             )
             self.assertIn("Cadence", dashboard_markup)
-            self.assertIn("Knee angle at foot-strike", dashboard_markup)
+            self.assertIn("Left knee angle", dashboard_markup)
+            self.assertIn("Right knee angle", dashboard_markup)
             self.assertIn("Ankle path", dashboard_markup)
             ankle_component = st.iframe.call_args.args[0]
             self.assertIn("2D ankle trajectory in image coordinates", ankle_component)
             self.assertIn("timeupdate", ankle_component)
             self.assertIn("seeked", ankle_component)
-            self.assertEqual(dashboard_markup.count("Not available"), 2)
+            self.assertNotIn("Not available", dashboard_markup)
+            self.assertIn("Left knee angle", dashboard_markup)
+            self.assertIn("80.0% coverage", dashboard_markup)
             self.assertTrue(any("image coordinates in source-video pixels" in str(call.args[0]) for call in st.caption.call_args_list))
             self.assertIn("#39d5e6", app.DASHBOARD_STYLES)
             self.assertIn("#ff9d55", app.DASHBOARD_STYLES)
             self.assertIn("@media (max-width: 760px)", app.DASHBOARD_STYLES)
             self.assertTrue(
-                any("experimental candidates only" in str(call.args[0]) for call in st.warning.call_args_list)
+                any("exploratory estimate" in str(call.args[0]) for call in st.warning.call_args_list)
             )
 
     def test_dashboard_displays_ground_truth_metrics_and_algorithm_comparison(self) -> None:

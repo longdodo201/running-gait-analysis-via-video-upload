@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from statistics import mean
 from typing import Any
 
 from .signal_processing import _finite_number
@@ -27,6 +28,8 @@ class SideQualityDiagnostics:
 
     missing_angle_count: int
     usable_angle_count: int
+    valid_frame_percentage: float
+    mean_knee_angle_deg: float | None
     status_counts: dict[str, int]
     adjacent_change_count: int
     q1_absolute_change_deg: float | None
@@ -83,6 +86,11 @@ def diagnose_knee_angles(
         value is not None and row.get(f"{side}_knee_status") == "ok"
         for row, value in zip(rows, values)
     )
+    valid_percentage = usable_count * 100.0 / len(rows) if rows else 0.0
+    usable_angles = [
+        value for row, value in zip(rows, values)
+        if value is not None and row.get(f"{side}_knee_status") == "ok"
+    ]
 
     adjacent_changes: list[tuple[float, int, int, float | None, float | None]] = []
     for index in range(len(rows) - 1):
@@ -125,6 +133,8 @@ def diagnose_knee_angles(
     return SideQualityDiagnostics(
         missing_angle_count=missing_count,
         usable_angle_count=usable_count,
+        valid_frame_percentage=valid_percentage,
+        mean_knee_angle_deg=mean(usable_angles) if usable_angles else None,
         status_counts=dict(sorted(statuses.items())),
         adjacent_change_count=len(adjacent_changes),
         q1_absolute_change_deg=q1,

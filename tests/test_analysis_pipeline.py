@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -189,6 +190,8 @@ class AnalysisPipelineTests(unittest.TestCase):
         self.assertIn("not confirmed foot-strikes", result.event_interpretation)
         self.assertEqual(result.left_quality.usable_angle_count, 15)
         self.assertEqual(result.right_quality.usable_angle_count, 15)
+        self.assertEqual(result.left_quality.valid_frame_percentage, 100.0)
+        self.assertIsNotNone(result.left_quality.mean_knee_angle_deg)
         self.assertEqual(
             result.candidate_event_count,
             result.left_candidate_event_count + result.right_candidate_event_count,
@@ -202,6 +205,9 @@ class AnalysisPipelineTests(unittest.TestCase):
             "runner_knee_angles_phase23.svg",
             "runner_gait_events_phase24.csv",
             "runner_gait_events_phase24.svg",
+            "candidate_cadence.csv",
+            "candidate_cadence_summary.json",
+            "analysis_diagnostics.json",
         }
         self.assertEqual({path.name for path in self.output.iterdir()}, expected)
         with result.knee_angles_csv.open(encoding="utf-8", newline="") as stream:
@@ -220,6 +226,51 @@ class AnalysisPipelineTests(unittest.TestCase):
         self.assertEqual(phase23[0]["frame_index"], phase22[0]["frame_index"])
         self.assertTrue(result.knee_angles_svg.is_file())
         self.assertTrue(result.gait_events_svg.is_file())
+        self.assertTrue(result.candidate_cadence_csv.is_file())
+        self.assertTrue(result.candidate_cadence_summary_json.is_file())
+        self.assertTrue(result.diagnostics_json.is_file())
+        self.assertEqual(result.cadence_summary["status"], "insufficient_events")
+        diagnostics = json.loads(result.diagnostics_json.read_text(encoding="utf-8"))
+        self.assertEqual(diagnostics["video"]["fps"], 30.0)
+        self.assertEqual(diagnostics["video"]["frame_count"], 15)
+        self.assertEqual(diagnostics["knee_angles"]["left"]["usable_angle_count"], 15)
+
+    def test_knee_failure_does_not_prevent_event_analysis(self) -> None:
+        validation, extraction = self._successful_patches()
+        with validation, extraction, mock.patch.object(
+            analysis, "knee_angle_rows", side_effect=RuntimeError("synthetic angle error")
+        ):
+            result = analysis.analyze_video(self.video, self.output, self.model)
+        self.assertTrue(result.gait_events_csv.is_file())
+        self.assertTrue(result.knee_angles_csv.is_file())
+        self.assertTrue(any("Knee-angle calculation is unavailable" in item for item in result.analysis_warnings))
+        with result.knee_angles_csv.open(encoding="utf-8", newline="") as stream:
+            rows = list(csv.DictReader(stream))
+        self.assertEqual(len(rows), 15)
+        self.assertTrue(all(row["left_knee_status"] == "analysis_error" for row in rows))
+
+    def test_event_detector_failure_does_not_prevent_knee_analysis(self) -> None:
+        validation, extraction = self._successful_patches()
+        with validation, extraction, mock.patch.object(
+            analysis, "detect_leg_cycle_candidates", side_effect=RuntimeError("synthetic detector error")
+        ):
+            result = analysis.analyze_video(self.video, self.output, self.model)
+        self.assertEqual(result.left_quality.usable_angle_count, 15)
+        self.assertEqual(result.cadence_summary["status"], "event_detection_unavailable")
+        self.assertTrue(any("Exploratory event detection is unavailable" in item for item in result.analysis_warnings))
+        self.assertTrue(result.knee_angles_svg.is_file())
+
+    def test_ground_truth_error_does_not_block_normal_video_metrics(self) -> None:
+        validation, extraction = self._successful_patches()
+        ground_truth = self.root / "wrong_video_ground_truth.csv"
+        ground_truth.write_text("incorrect header\n", encoding="utf-8")
+        with validation, extraction:
+            result = analysis.analyze_video(
+                self.video, self.output, self.model, ground_truth_path=ground_truth
+            )
+        self.assertEqual(result.left_quality.usable_angle_count, 15)
+        self.assertTrue(result.knee_angles_svg.is_file())
+        self.assertTrue(any("Ground Truth evaluation is unavailable" in item for item in result.analysis_warnings))
 
     def test_pipeline_writes_ground_truth_analysis_without_replacing_standard_artifacts(self) -> None:
         validation, extraction = self._successful_patches()
@@ -241,16 +292,15 @@ class AnalysisPipelineTests(unittest.TestCase):
         self.assertEqual(result.foot_strike_evaluation_csv.parent, self.output.resolve())
         self.assertEqual(len(list(self.output.glob("*ground_truth*"))), 3)
 
-    def test_alignment_failure_does_not_publish_outputs_and_preserves_cause(self) -> None:
+    def test_alignment_failure_does_not_block_other_metrics(self) -> None:
         validation, extraction = self._successful_patches()
         failure = ValueError("synthetic alignment mismatch")
         with validation, extraction, mock.patch.object(analysis, "validate_phase23_alignment", side_effect=failure):
-            with self.assertRaises(analysis.AnalysisPipelineError) as caught:
-                analysis.analyze_video(self.video, self.output, self.model)
-        self.assertIn("Phase 2.3/event alignment failed", str(caught.exception))
-        self.assertIs(caught.exception.__cause__, failure)
-        self.assertFalse(self.output.exists())
-        self.assertEqual(list(self.root.glob(".analysis.tmp-*")), [])
+            result = analysis.analyze_video(self.video, self.output, self.model)
+        self.assertTrue(result.knee_angles_csv.is_file())
+        self.assertTrue(result.annotated_video.is_file())
+        self.assertEqual(result.cadence_summary["status"], "event_detection_unavailable")
+        self.assertTrue(any("synthetic alignment mismatch" in item for item in result.analysis_warnings))
 
     def test_writer_failure_cleans_only_temporary_artifacts(self) -> None:
         validation, extraction = self._successful_patches()

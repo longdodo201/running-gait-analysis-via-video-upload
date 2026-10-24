@@ -11,6 +11,7 @@ all filesystems or protect against external processes changing the destination.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+import csv
 import json
 import os
 from pathlib import Path
@@ -20,12 +21,13 @@ import time
 from typing import Any, Callable
 
 from .gait_events import (
-    CandidateEvent,
     EventDetectionParameters,
+    EventDetectionResult,
     detect_leg_cycle_candidates,
     validate_phase23_alignment,
 )
 from .gait_metrics import KneeAngleRow, knee_angle_rows
+from .cadence import CandidateCadenceParameters, estimate_candidate_cadence
 from .foot_strike_analysis import (
     ContactZoneParameters,
     candidates_to_predictions,
@@ -79,6 +81,12 @@ class AnalysisResult:
     cadence_svg: Path | None = None
     ground_truth_metrics_json: Path | None = None
     ground_truth_report: Path | None = None
+    candidate_cadence_csv: Path | None = None
+    candidate_cadence_summary_json: Path | None = None
+    diagnostics_json: Path | None = None
+    cadence_summary: dict[str, Any] | None = None
+    analysis_warnings: tuple[str, ...] = ()
+    video_metadata: dict[str, Any] | None = None
 
 
 def _is_same_or_within(path: Path, parent: Path) -> bool:
@@ -131,12 +139,13 @@ def analyze_video(
     visibility_threshold: float = 0.5,
     presence_threshold: float = 0.5,
     event_parameters: EventDetectionParameters | None = None,
+    cadence_parameters: CandidateCadenceParameters | None = None,
     ground_truth_path: str | Path | None = None,
     contact_zone_parameters: ContactZoneParameters | None = None,
     matching_tolerance_frames: int = 2,
     progress: Callable[[str], None] | None = None,
 ) -> AnalysisResult:
-    """Run existing Phase 1–2.4 stages and publish seven artifacts for an MP4.
+    """Run the analysis stages and publish artifacts for one MP4.
 
     Relative video/model/output paths are interpreted from the current working
     directory, matching the existing scripts and model-path behavior. A
@@ -170,7 +179,11 @@ def analyze_video(
         "knee_angles_svg": temporary_dir / f"{stem}_knee_angles_phase23.svg",
         "gait_events_csv": temporary_dir / f"{stem}_gait_events_phase24.csv",
         "gait_events_svg": temporary_dir / f"{stem}_gait_events_phase24.svg",
+        "candidate_cadence_csv": temporary_dir / "candidate_cadence.csv",
+        "candidate_cadence_summary_json": temporary_dir / "candidate_cadence_summary.json",
+        "diagnostics_json": temporary_dir / "analysis_diagnostics.json",
     }
+    analysis_warnings: list[str] = []
     try:
         _run_stage(
             "Landmark extraction",
@@ -191,25 +204,78 @@ def analyze_video(
             return document
 
         document = _run_stage("Landmark JSON loading", load_landmarks)
-        angle_rows = _run_stage(
-            "Knee-angle calculation",
-            knee_angle_rows,
-            document,
-            visibility_threshold,
-            presence_threshold,
-        )
+        event_detection_warning: str | None = None
+        try:
+            angle_rows = _run_stage(
+                "Knee-angle calculation",
+                knee_angle_rows,
+                document,
+                visibility_threshold,
+                presence_threshold,
+            )
+        except Exception as exc:
+            analysis_warnings.append(f"Knee-angle calculation is unavailable: {exc}")
+            angle_rows = [
+                KneeAngleRow(
+                    frame_index=frame.get("frame_index", index) if isinstance(frame, dict) else index,
+                    timestamp_seconds=frame.get("timestamp_seconds") if isinstance(frame, dict) else None,
+                    left_knee_angle_deg=None,
+                    right_knee_angle_deg=None,
+                    left_knee_status="analysis_error",
+                    right_knee_status="analysis_error",
+                )
+                for index, frame in enumerate(document.get("frames", []))
+            ]
         angle_mappings = [asdict(row) for row in angle_rows]
         left_quality = _run_stage("Left-side quality diagnostics", diagnose_knee_angles, angle_mappings, "left")
         right_quality = _run_stage("Right-side quality diagnostics", diagnose_knee_angles, angle_mappings, "right")
         smoothed_rows = _run_stage("Knee-angle smoothing", add_smoothed_knee_angles, angle_mappings)
 
-        event_result = _run_stage(
-            "Exploratory event detection",
-            detect_leg_cycle_candidates,
-            document,
-            event_parameters,
-        )
-        _run_stage("Phase 2.3/event alignment", validate_phase23_alignment, event_result.samples, smoothed_rows)
+        try:
+            event_result = _run_stage(
+                "Exploratory event detection",
+                detect_leg_cycle_candidates,
+                document,
+                event_parameters,
+            )
+            _run_stage("Phase 2.3/event alignment", validate_phase23_alignment, event_result.samples, smoothed_rows)
+        except Exception as exc:
+            event_detection_warning = str(exc)
+            analysis_warnings.append(f"Exploratory event detection is unavailable: {exc}")
+            event_result = EventDetectionResult((), (), event_parameters or EventDetectionParameters())
+
+        video_metadata = document.get("video", {})
+        video_metadata = video_metadata if isinstance(video_metadata, dict) else {}
+        fps = video_metadata.get("fps")
+        frame_count = len(document.get("frames", []))
+        duration = frame_count / float(fps) if isinstance(fps, (int, float)) and fps > 0 else None
+        try:
+            cadence_series, cadence_summary = estimate_candidate_cadence(
+                event_result.events,
+                frames=document.get("frames", []),
+                fps=float(fps) if isinstance(fps, (int, float)) and fps > 0 else None,
+                duration_seconds=duration,
+                parameters=cadence_parameters,
+            )
+            if event_detection_warning is not None:
+                cadence_summary["status"] = "event_detection_unavailable"
+                cadence_summary["average_cadence_steps_per_minute"] = None
+                cadence_summary["warning"] = (
+                    "Cadence is unavailable because exploratory event detection or frame alignment failed."
+                )
+        except Exception as exc:
+            analysis_warnings.append(f"Candidate cadence is unavailable: {exc}")
+            cadence_series = []
+            cadence_summary = {
+                "status": "calculation_error",
+                "event_source": "exploratory_heel_trajectory_candidates",
+                "average_cadence_steps_per_minute": None,
+                "candidate_event_count": len(event_result.events),
+                "retained_event_count": 0,
+                "duration_seconds": duration,
+                "fps": fps,
+                "warning": str(exc),
+            }
         _run_stage("Phase 2.2 CSV writing", write_knee_angles_csv, angle_rows, paths["knee_angles_csv"])
         _run_stage(
             "Phase 2.3 CSV writing",
@@ -224,6 +290,17 @@ def analyze_video(
             write_candidate_events_csv,
             event_result.events,
             paths["gait_events_csv"],
+        )
+        with paths["candidate_cadence_csv"].open("x", newline="", encoding="utf-8") as stream:
+            writer = csv.DictWriter(stream, fieldnames=(
+                "window_start_seconds", "window_end_seconds", "window_center_seconds",
+                "step_count", "cadence_steps_per_minute",
+            ))
+            writer.writeheader()
+            writer.writerows(cadence_series)
+        paths["candidate_cadence_summary_json"].write_text(
+            json.dumps(cadence_summary, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
+            encoding="utf-8",
         )
         _run_stage(
             "Phase 2.4 plot writing",
@@ -271,9 +348,63 @@ def analyze_video(
                 )
                 return artifacts
 
-            ground_truth_artifacts = _run_stage(
-                "Ground Truth evaluation and metrics", analyze_ground_truth
-            )
+            try:
+                ground_truth_artifacts = _run_stage(
+                    "Ground Truth evaluation and metrics", analyze_ground_truth
+                )
+            except Exception as exc:
+                analysis_warnings.append(f"Ground Truth evaluation is unavailable: {exc}")
+
+        landmark_frames = document.get("frames", [])
+        valid_landmark_frames = sum(
+            bool(frame.get("poses")) for frame in landmark_frames if isinstance(frame, dict)
+        )
+        if not landmark_frames or valid_landmark_frames / len(landmark_frames) < 0.5:
+            analysis_warnings.append("Pose tracking is low quality: fewer than half of frames contain a detected pose.")
+        for side, quality in (("left", left_quality), ("right", right_quality)):
+            if quality.usable_angle_count == 0:
+                analysis_warnings.append(f"No valid {side} knee-angle measurements were available.")
+            elif quality.valid_frame_percentage < 50.0:
+                analysis_warnings.append(
+                    f"Low {side} knee-angle coverage: {quality.valid_frame_percentage:.1f}% of frames were valid."
+                )
+        diagnostics = {
+            "source_video": document.get("source_video"),
+            "video": {
+                "fps": video_metadata.get("fps"),
+                "frame_count": frame_count,
+                "duration_seconds": duration,
+                "width": video_metadata.get("width"),
+                "height": video_metadata.get("height"),
+                "timestamp_basis": document.get("timestamp_basis"),
+            },
+            "valid_landmark_frames": valid_landmark_frames,
+            "valid_landmark_frame_percentage": (
+                valid_landmark_frames * 100.0 / len(landmark_frames) if landmark_frames else 0.0
+            ),
+            "knee_angles": {
+                "left": asdict(left_quality),
+                "right": asdict(right_quality),
+            },
+            "candidate_events": {
+                "total": len(event_result.events),
+                "by_side": {
+                    side: sum(event.side == side for event in event_result.events)
+                    for side in ("left", "right")
+                },
+                "cadence": cadence_summary,
+            },
+            "ground_truth_evaluation": (
+                "completed" if ground_truth_artifacts
+                else "unavailable" if ground_truth_path is not None
+                else "not_requested"
+            ),
+            "warnings": analysis_warnings,
+        }
+        paths["diagnostics_json"].write_text(
+            json.dumps(diagnostics, indent=2, ensure_ascii=False, allow_nan=False) + "\n",
+            encoding="utf-8",
+        )
 
         def publish() -> None:
             if destination.exists():
@@ -312,4 +443,7 @@ def analyze_video(
         cadence_svg=final_ground_truth_artifacts.get("cadence_svg"),
         ground_truth_metrics_json=final_ground_truth_artifacts.get("metrics_json"),
         ground_truth_report=final_ground_truth_artifacts.get("report"),
+        cadence_summary=cadence_summary,
+        analysis_warnings=tuple(analysis_warnings),
+        video_metadata=video_metadata,
     )
